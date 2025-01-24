@@ -1,0 +1,98 @@
+# Compiled object files, libraries, executables
+*.o
+*.a
+*.so
+*.exe
+
+# Precompiled headers
+*.gch
+*.pch
+
+# Autoconf files
+/config.cache
+/config.log
+/config.status
+/configure
+/autom4te.cache/
+/aclocal.m4
+/compile
+/depcomp
+/install-sh
+/missing
+/ltmain.sh
+
+# Build directories
+/build/
+/bin/
+/lib/
+/obj/
+/out/
+
+# Generated files
+Makefile
+Makefile.in
+stamp-h1
+config.h
+config.h.in
+*.spec
+
+# Debug files
+*.dSYM/
+/*.stackdump
+*.core
+
+# Cscope and tags files
+cscope.*
+tags
+
+# Backup files
+*~
+*.bak
+*.swp
+*.tmp
+*.old
+*.orig
+
+# Logs and databases
+*.log
+*.sql
+*.sqlite
+
+# IDE and editor files
+.idea/
+.vscode/
+*.user
+*.sublime-workspace
+*.sublime-project
+
+# Ignore generated documentation
+/docs/
+/*.html
+/*.pdf
+/*.tex
+
+# Ignore any temporary files created during testing or execution
+*.pid
+*.log
+*.test
+*.tmp
+*.out
+*.err
+
+# Ignore temporary files from GNU Build
+*.lo
+*.la
+.libs/
+
+# Ignore any files created by dist
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+
+# Ignore binary executables
+*.bin
+*.elf
+
+# Ignore other temporary files
+*.cache
+*.d
