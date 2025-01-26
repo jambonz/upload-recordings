@@ -49,7 +49,7 @@ public:
     }
 
     std::string decrypt(const std::string &encryptedData) {
-        std::cout << "Decrypting data: " << encryptedData << std::endl;
+        //std::cout << "Decrypting data: " << encryptedData << std::endl;
 
         std::string ivHex, contentHex;
 
@@ -62,7 +62,7 @@ public:
         cJSON* jIvHex = cJSON_AS4CPP_GetObjectItem(json, "iv");
         if (jIvHex && cJSON_AS4CPP_IsString(jIvHex)) {
             ivHex = jIvHex->valuestring;
-            std::cout << "Parsed IV (Hex): " << ivHex << std::endl;
+            //std::cout << "Parsed IV (Hex): " << ivHex << std::endl;
         } else {
             throw std::runtime_error("IV not found in encrypted data JSON");
         }
@@ -70,7 +70,7 @@ public:
         cJSON* jContentHex = cJSON_AS4CPP_GetObjectItem(json, "content");
         if (jContentHex && cJSON_AS4CPP_IsString(jContentHex)) {
             contentHex = jContentHex->valuestring;
-            std::cout << "Parsed Encrypted Content (Hex): " << contentHex << std::endl;
+            //std::cout << "Parsed Encrypted Content (Hex): " << contentHex << std::endl;
         } else {
             throw std::runtime_error("Content not found in encrypted data JSON");
         }
@@ -81,11 +81,11 @@ public:
         std::vector<unsigned char> iv = hexToBytes(ivHex);
         std::vector<unsigned char> content = hexToBytes(contentHex);
 
-        std::cout << "IV Size: " << iv.size() << " bytes, IV (Binary): ";
-        for (unsigned char byte : iv) std::cout << std::hex << (int)byte << " ";
-        std::cout << std::endl;
+        //std::cout << "IV Size: " << iv.size() << " bytes, IV (Binary): ";
+        //for (unsigned char byte : iv) std::cout << std::hex << (int)byte << " ";
+        //std::cout << std::endl;
 
-        std::cout << "Encrypted Content Size: " << content.size() << " bytes" << std::endl;
+        //std::cout << "Encrypted Content Size: " << content.size() << " bytes" << std::endl;
 
         if (iv.size() != AES_BLOCK_SIZE) {
             throw std::runtime_error("Invalid IV size");
@@ -96,13 +96,13 @@ public:
         SHA256(reinterpret_cast<const unsigned char*>(encryptionSecret_.c_str()), encryptionSecret_.size(), rawHash);
 
         std::string base64Key = base64Encode(rawHash, SHA256_DIGEST_LENGTH);
-        std::cout << "Derived Base64 Key: " << base64Key << std::endl;
+        //std::cout << "Derived Base64 Key: " << base64Key << std::endl;
 
         if (base64Key.size() < 32) {
             throw std::runtime_error("Derived key is too short");
         }
         std::string truncatedKey = base64Key.substr(0, 32);
-        std::cout << "Truncated Key (First 32 Bytes): " << truncatedKey << std::endl;
+        //std::cout << "Truncated Key (First 32 Bytes): " << truncatedKey << std::endl;
 
         // Prepare OpenSSL decryption
         EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
@@ -136,9 +136,9 @@ public:
 
         decryptedContent.resize(decryptedLength + finalLength);
 
-        std::cout << "Decryption successful, Final Size: " << decryptedContent.size() << " bytes" << std::endl;
+        //std::cout << "Decryption successful, Final Size: " << decryptedContent.size() << " bytes" << std::endl;
         std::string result(decryptedContent.begin(), decryptedContent.end());
-        std::cout << "Decrypted Text: " << result << std::endl;
+        //std::cout << "Decrypted Text: " << result << std::endl;
 
         return result;
     }

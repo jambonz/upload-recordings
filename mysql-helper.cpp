@@ -70,7 +70,7 @@ RecordCredentials MySQLHelper::fetchRecordCredentials(std::string& accountSid) {
             credentials.recordFormat = res->getString("record_format");
             credentials.bucketCredential = res->getString("bucket_credential");
 
-            std::cout << "Record format: " << credentials.recordFormat << ", Bucket credential: " << credentials.bucketCredential << std::endl;
+            //std::cout << "Record format: " << credentials.recordFormat << ", Bucket credential: " << credentials.bucketCredential << std::endl;
         } else {
             throw std::runtime_error("Account not found for SID: " + accountSid);
         }

@@ -46,11 +46,12 @@ int main(int argc, const char **argv) {
       options.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Debug;
       Aws::InitAPI(options);
 
-      int logs = LLL_USER | LLL_ERR | LLL_WARN | LLL_NOTICE;
+      int logs = LLL_ERR | LLL_WARN;
       int port = parse_port(argc, argv, 3017); // Default to 3017 if --port is not provided
 
       // Set the SIGINT handler
       std::signal(SIGINT, sigint_handler);
+      std::signal(SIGTERM, sigint_handler);
 
       // Check for log level argument
       if ((p = lws_cmdline_option(argc, argv, "-d"))) {
@@ -95,7 +96,7 @@ int main(int argc, const char **argv) {
       }
 
       while (n >= 0 && !interrupted) { // Use the corrected atomic variable
-          n = lws_service(context, 0);
+          n = lws_service(context, 50);
       }
 
       std::cerr << "lws thread Exiting...\n";

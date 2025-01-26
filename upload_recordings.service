@@ -1,0 +1,23 @@
+[Unit]
+Description=Upload Recordings Service
+After=network.target
+
+[Service]
+Environment="MYSQL_HOST=jambonz-xyz-aurora-mysql-cluster.xxxxxxx"
+Environment="MYSQL_USER=xxxx"
+Environment="MYSQL_PASSWORD=xxxxx"
+Environment="MYSQL_DATABASE=jambones"
+Environment="BASIC_AUTH_USERNAME=xxxxx"
+Environment="BASIC_AUTH_PASSWORD=xxxxx"
+Environment="ENCRYPTION_SECRET=xxxxxx"
+ExecStart=/usr/local/bin/upload_recordings --port 3017
+Restart=always
+RestartSec=5
+User=admin
+Group=admin
+WorkingDirectory=/usr/local/bin
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
