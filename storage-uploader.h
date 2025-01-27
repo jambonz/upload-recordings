@@ -6,6 +6,8 @@
 #include <iomanip>
 #include <sstream>
 #include <ctime>
+#include <fstream>
+#include <filesystem>
 
 enum class RecordFileType {
     WAV,
@@ -27,7 +29,9 @@ struct Metadata_t {
 
 class StorageUploader {
 public:
-    virtual ~StorageUploader() = default;
+    virtual ~StorageUploader() {
+        cleanupTempFile(); // Ensure cleanup when the uploader is destroyed
+    }
 
     // Upload method to be implemented by derived classes
     virtual bool upload(std::vector<char>& data, bool isFinalChunk = false) = 0;
@@ -38,29 +42,21 @@ public:
     }
 
 protected:
+    // Create a unique temporary file
+    void createTempFile(const std::string& uploadFolder);
 
-  std::string createObjectPath(const std::string& callSid, const std::string& recordFormat) {
-    // Get the current date and time
-    std::time_t t = std::time(nullptr);
-    std::tm tm = *std::localtime(&t);
+    // Cleanup the temporary file
+    void cleanupTempFile();
 
-    // Create a string stream to format the path
-    std::ostringstream pathStream;
+    // Create the object path for upload
+    std::string createObjectPath(const std::string& callSid, const std::string& recordFormat);
 
-    // Append year, month, and day, formatted as YYYY/MM/DD
-    pathStream << tm.tm_year + 1900 << "/"
-              << std::setfill('0') << std::setw(2) << tm.tm_mon + 1 << "/"
-              << std::setfill('0') << std::setw(2) << tm.tm_mday << "/";
+    struct Metadata_t metadata_;
+    bool upload_in_progress_ = false;
+    bool upload_failed_ = false;
 
-    // Append the callSid and recordFormat to the path
-    pathStream << callSid << "." << recordFormat;
-
-    return pathStream.str();
-  }
-
-  struct Metadata_t metadata_;
-  bool upload_in_progress_;
-  bool upload_failed_;
+    std::string tempFilePath_;
+    std::ofstream tempFile_;
 };
 
 #endif // STORAGE_UPLOADER_H

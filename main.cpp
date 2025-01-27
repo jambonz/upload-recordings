@@ -46,7 +46,7 @@ int main(int argc, const char **argv) {
       options.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Debug;
       Aws::InitAPI(options);
 
-      int logs = LLL_ERR | LLL_WARN;
+      int logs = LLL_ERR | LLL_WARN;// | LLL_NOTICE | LLL_INFO | LLL_DEBUG;
       int port = parse_port(argc, argv, 3017); // Default to 3017 if --port is not provided
 
       // Set the SIGINT handler

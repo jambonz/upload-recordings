@@ -4,14 +4,16 @@ upload_recordings_SOURCES = main.cpp \
   protocol-lws.c \
   session.cpp \
   session-wrapper.cpp \
-  s3-uploader.cpp \
+  storage-uploader.cpp \
   s3-compatible-uploader.cpp \
+  azure-uploader.cpp \
   mysql-helper.cpp 
 
 upload_recordings_CPPFLAGS = $(LIBWEBSOCKETS_CFLAGS) \
   -I/usr/include/lame \
   -I/usr/include/cppconn \
-  -I/usr/include/aws-sdk-cpp
+  -I/usr/include/aws-sdk-cpp \
+  -I/usr/include/curl
 
 upload_recordings_LDADD = $(LIBWEBSOCKETS_LIBS) \
   -lmp3lame \
@@ -19,6 +21,7 @@ upload_recordings_LDADD = $(LIBWEBSOCKETS_LIBS) \
   -laws-cpp-sdk-s3-crt \
   -laws-cpp-sdk-s3 \
   -laws-cpp-sdk-core \
+  -lcurl \
   -lssl \
   -lcrypto
 

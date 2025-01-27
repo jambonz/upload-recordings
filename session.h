@@ -14,11 +14,10 @@
 
 #include <aws/core/external/cjson/cJSON.h>
 
-#include "s3-uploader.h"
-#include "s3-compatible-uploader.h"
 #include "mp3-encoder.h"
 #include "mysql-helper.h"
 #include "crypto-helper.h"
+#include "storage-uploader.h"
 
 enum class StorageService {
     AWS_S3,
@@ -91,6 +90,10 @@ private:
   std::string region_;
   std::string custom_endpoint_;
 
+  // Azure
+  std::string connection_string_;
+  std::string container_name_;
+
   // Worker thread function
   void worker() {
     while (true) {
@@ -146,8 +149,13 @@ private:
                 //std::cout << "Using S3 compatible storage service.\n";
                 parseAwsCredentials(decryptedBucketCredential);
               }
+              else if(std::string(vendor->valuestring) == "azure") {
+                storage_service_ = StorageService::AZURE_CLOUD_STORAGE;
+                std::cout << "Using Azure cloud storage service.\n";
+                parseAzureCredentials(decryptedBucketCredential);
+              }
               else {
-                std::cerr << "Unsupported storage service: " << vendor->valuestring << std::endl;
+                std::cerr << "Unsupported storage service: '" << vendor->valuestring << "'" << std::endl;
               }
             }
             cJSON_AS4CPP_Delete(bucketCredentialJson);
@@ -201,6 +209,7 @@ private:
   }
 
   void parseAwsCredentials(const std::string& credentials) ;
+  void parseAzureCredentials(const std::string& credentials) ;
   void parseMetadata(cJSON* json) ;
 
   // Factory method for creating a StorageUploader (you can extend this as needed)

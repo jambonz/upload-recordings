@@ -2,39 +2,35 @@
 #include "wav-header.h"
 #include <iostream>
 #include <stdexcept>
+#include <fstream>
 #include <cstdio>
 
-S3CompatibleUploader::S3CompatibleUploader(std::string& uploadFolder, RecordFileType ftype, const Aws::Auth::AWSCredentials& credentials, const Aws::String& region, 
+S3CompatibleUploader::S3CompatibleUploader(std::string& uploadFolder, RecordFileType ftype,
+                                           const Aws::Auth::AWSCredentials& credentials, const Aws::String& region,
                                            const Aws::String& bucketName, const Aws::String& customEndpoint)
-    : bucketName_(bucketName), region_(region), recordFileType_(ftype), firstWrite_(true), uploadFolder_(uploadFolder) {
+    : bucketName_(bucketName), region_(region), recordFileType_(ftype), firstWrite_(true) {
     Aws::S3Crt::ClientConfiguration config;
     config.region = region;
 
-    if (customEndpoint.empty()) {
-      config.endpointOverride = customEndpoint;
-      config.useVirtualAddressing = false;
-      std::cout << "Creating S3 compatible uploader for bucket: " << bucketName << ", endpoint: " << customEndpoint << std::endl;
+    if (!customEndpoint.empty()) {
+        config.endpointOverride = customEndpoint;
+        config.useVirtualAddressing = false;
+        std::cout << "Creating S3 compatible uploader for bucket: " << bucketName << ", endpoint: " << customEndpoint << std::endl;
+    } else {
+        std::cout << "Creating S3 uploader for bucket: " << bucketName << " in region " << region << std::endl;
     }
-    else {
-      std::cout << "Creating S3 uploader for bucket: " << bucketName << " in region " << region << std::endl;
-    }
-  
+
     s3CrtClient_ = std::make_shared<Aws::S3Crt::S3CrtClient>(
         Aws::MakeShared<Aws::Auth::SimpleAWSCredentialsProvider>("MemoryStreamAllocator", credentials),
         config
     );
 
-    // Create a temporary file to buffer data
-    tempFilePath_ = uploadFolder + "/" + std::to_string(std::time(nullptr)) + ".tmp";
-    tempFile_.open(tempFilePath_, std::ios::binary | std::ios::out);
-    if (!tempFile_.is_open()) {
-        throw std::runtime_error("Failed to open temporary file for buffering: " + tempFilePath_);
-    }
-    //std::cout << "Temporary file created: " << tempFilePath_ << std::endl;
+    // Create a temporary file for buffering data
+    createTempFile(uploadFolder);
 }
 
 S3CompatibleUploader::~S3CompatibleUploader() {
-    cleanupTempFile();
+    cleanupTempFile(); // Use the no-argument cleanupTempFile
 }
 
 bool S3CompatibleUploader::upload(std::vector<char>& data, bool isFinalChunk) {
@@ -43,13 +39,17 @@ bool S3CompatibleUploader::upload(std::vector<char>& data, bool isFinalChunk) {
         upload_failed_ = true;
         return false;
     }
+
     if (firstWrite_) {
         firstWrite_ = false;
+
         // Write the WAV header if this is the first write
-        WavHeaderPrepender headerPrepender(8000, 2, 16);
-        headerPrepender.prependHeader(data);
+        if (recordFileType_ == RecordFileType::WAV) {
+            WavHeaderPrepender headerPrepender(8000, 2, 16);
+            headerPrepender.prependHeader(data);
+        }
     }
-  
+
     // Write the data chunk to the temporary file
     tempFile_.write(data.data(), data.size());
     if (!tempFile_) {
@@ -101,13 +101,4 @@ void S3CompatibleUploader::finalizeUpload() {
     } else {
         std::cout << "File uploaded successfully: " << objectKey_ << std::endl;
     }
-
-    cleanupTempFile();
-}
-
-void S3CompatibleUploader::cleanupTempFile() {
-    if (tempFile_.is_open()) {
-        tempFile_.close();
-    }
-    std::remove(tempFilePath_.c_str()); // Delete the temporary file
 }

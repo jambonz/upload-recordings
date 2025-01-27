@@ -1,4 +1,6 @@
 #include "session.h"
+#include "s3-compatible-uploader.h"
+#include "azure-uploader.h"
 
 // Static member initialization
 std::once_flag Session::initFlag_;
@@ -9,6 +11,8 @@ Session::Session() : json_metadata_(nullptr), closed_(false), storage_service_(S
   buffer_.reserve(MAX_BUFFER_SIZE);
   initialize();
   worker_thread_ = std::thread(&Session::worker, this);
+
+  std::cout << "created session" << std::endl;
 }
 
 Session::~Session() {
@@ -23,6 +27,7 @@ Session::~Session() {
   if (worker_thread_.joinable()) {
     worker_thread_.join();
   }
+  std::cout << "destroyed session" << std::endl;
 }
 
 void Session::addData(int isBinary, const char *data, size_t len) {
@@ -104,68 +109,76 @@ void Session::parseAwsCredentials(const std::string& credentials) {
   cJSON_AS4CPP_Delete(json);
 }
 
+void Session::parseAzureCredentials(const std::string& credentials) {
+  cJSON* json = cJSON_AS4CPP_Parse(credentials.c_str());
+  if (!json) {
+    std::cerr << "Failed to parse Azure credentials JSON.\n";
+    return;
+  }
+
+  cJSON* containerName = cJSON_AS4CPP_GetObjectItem(json, "name");
+  if (containerName && cJSON_AS4CPP_IsString(containerName)) {
+    container_name_ = containerName->valuestring;
+  }
+
+  cJSON* connectionString = cJSON_AS4CPP_GetObjectItem(json, "connection_string");
+  if (connectionString && cJSON_AS4CPP_IsString(connectionString)) {
+    connection_string_ = connectionString->valuestring;
+  }
+
+  cJSON_AS4CPP_Delete(json);
+}
+
 void Session::parseMetadata(cJSON* json) {
-if (!json) {
-  std::cerr << "Invalid JSON object for metadata parsing.\n";
-  return;
-}
+  if (!json) {
+    std::cerr << "Invalid JSON object for metadata parsing.\n";
+    return;
+  }
 
-cJSON* sampleRate = cJSON_AS4CPP_GetObjectItem(json, "sampleRate");
-if (sampleRate && cJSON_AS4CPP_IsNumber(sampleRate)) {
-  metadata_.sample_rate = sampleRate->valueint;
-}
+  cJSON* sampleRate = cJSON_AS4CPP_GetObjectItem(json, "sampleRate");
+  if (sampleRate && cJSON_AS4CPP_IsNumber(sampleRate)) {
+    metadata_.sample_rate = sampleRate->valueint;
+  }
 
-cJSON* accountSid = cJSON_AS4CPP_GetObjectItem(json, "accountSid");
-if (accountSid && cJSON_AS4CPP_IsString(accountSid)) {
-  account_sid_ = accountSid->valuestring;
-}
+  cJSON* accountSid = cJSON_AS4CPP_GetObjectItem(json, "accountSid");
+  if (accountSid && cJSON_AS4CPP_IsString(accountSid)) {
+    account_sid_ = accountSid->valuestring;
+  }
 
-cJSON* callSid = cJSON_AS4CPP_GetObjectItem(json, "callSid");
-if (callSid && cJSON_AS4CPP_IsString(callSid)) {
-  metadata_.call_sid = callSid->valuestring;
-}
+  cJSON* callSid = cJSON_AS4CPP_GetObjectItem(json, "callSid");
+  if (callSid && cJSON_AS4CPP_IsString(callSid)) {
+    metadata_.call_sid = callSid->valuestring;
+  }
 
-cJSON* direction = cJSON_AS4CPP_GetObjectItem(json, "direction");
-if (direction && cJSON_AS4CPP_IsString(direction)) {
-  metadata_.direction = direction->valuestring;
-}
+  cJSON* direction = cJSON_AS4CPP_GetObjectItem(json, "direction");
+  if (direction && cJSON_AS4CPP_IsString(direction)) {
+    metadata_.direction = direction->valuestring;
+  }
 
-cJSON* from = cJSON_AS4CPP_GetObjectItem(json, "from");
-if (from && cJSON_AS4CPP_IsString(from)) {
-  metadata_.from = from->valuestring;
-}
+  cJSON* from = cJSON_AS4CPP_GetObjectItem(json, "from");
+  if (from && cJSON_AS4CPP_IsString(from)) {
+    metadata_.from = from->valuestring;
+  }
 
-cJSON* to = cJSON_AS4CPP_GetObjectItem(json, "to");
-if (to && cJSON_AS4CPP_IsString(to)) {
-  metadata_.to = to->valuestring;
-}
+  cJSON* to = cJSON_AS4CPP_GetObjectItem(json, "to");
+  if (to && cJSON_AS4CPP_IsString(to)) {
+    metadata_.to = to->valuestring;
+  }
 
-cJSON* applicationSid = cJSON_AS4CPP_GetObjectItem(json, "applicationSid");
-if (applicationSid && cJSON_AS4CPP_IsString(applicationSid)) {
-  metadata_.application_sid = applicationSid->valuestring;
-}
+  cJSON* applicationSid = cJSON_AS4CPP_GetObjectItem(json, "applicationSid");
+  if (applicationSid && cJSON_AS4CPP_IsString(applicationSid)) {
+    metadata_.application_sid = applicationSid->valuestring;
+  }
 
-cJSON* originatingSipIp = cJSON_AS4CPP_GetObjectItem(json, "originatingSipIp");
-if (originatingSipIp && cJSON_AS4CPP_IsString(originatingSipIp)) {
-  metadata_.originating_sip_id = originatingSipIp->valuestring;
-}
+  cJSON* originatingSipIp = cJSON_AS4CPP_GetObjectItem(json, "originatingSipIp");
+  if (originatingSipIp && cJSON_AS4CPP_IsString(originatingSipIp)) {
+    metadata_.originating_sip_id = originatingSipIp->valuestring;
+  }
 
-cJSON* originatingSipTrunkName = cJSON_AS4CPP_GetObjectItem(json, "fsSipAddress");
-if (originatingSipTrunkName && cJSON_AS4CPP_IsString(originatingSipTrunkName)) {
-  metadata_.originating_sip_trunk_name = originatingSipTrunkName->valuestring;
-}
-
-/*
-std::cout << "Parsed metadata:\n"
-          << "  sample_rate: " << metadata_.sample_rate << std::endl
-          << "  call_sid: " << metadata_.call_sid << std::endl
-          << "  direction: " << metadata_.direction << std::endl
-          << "  from: " << metadata_.from << std::endl
-          << "  to: " << metadata_.to << std::endl
-          << "  application_sid: " << metadata_.application_sid << std::endl
-          << "  originating_sip_id: " << metadata_.originating_sip_id << std::endl
-          << "  originating_sip_trunk_name: " << metadata_.originating_sip_trunk_name << std::endl;
-*/
+  cJSON* originatingSipTrunkName = cJSON_AS4CPP_GetObjectItem(json, "fsSipAddress");
+  if (originatingSipTrunkName && cJSON_AS4CPP_IsString(originatingSipTrunkName)) {
+    metadata_.originating_sip_trunk_name = originatingSipTrunkName->valuestring;
+  }
 }
 
 std::unique_ptr<StorageUploader> Session::createStorageUploader(RecordFileType ftype) {
@@ -192,8 +205,11 @@ std::unique_ptr<StorageUploader> Session::createStorageUploader(RecordFileType f
           std::cerr << "Google Cloud Storage uploader not implemented yet.\n";
           return nullptr;
       case StorageService::AZURE_CLOUD_STORAGE:
-          std::cerr << "Azure Cloud Storage uploader not implemented yet.\n";
-          return nullptr;
+        return std::make_unique<AzureUploader>(
+            ftype,
+            connection_string_,
+            container_name_
+        );
       default:
           std::cerr << "Unknown storage service.\n";
           return nullptr;

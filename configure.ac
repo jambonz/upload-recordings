@@ -1,5 +1,5 @@
 # Initialize Autoconf
-AC_INIT([minimal-ws-server], [1.0], [youremail@example.com])
+AC_INIT([upload_recordings], [1.0], [youremail@example.com])
 AC_PREREQ([2.69])
 
 # Initialize Automake
@@ -22,9 +22,16 @@ PKG_CHECK_MODULES([LIBWEBSOCKETS], [libwebsockets >= 4.0],
   [],
   [AC_MSG_ERROR([libwebsockets >= 4.0 is required but was not found.])])
 
+# Check for libcurl using pkg-config
+PKG_CHECK_MODULES([LIBCURL], [libcurl >= 7.0],
+  [],
+  [AC_MSG_ERROR([libcurl >= 7.0 is required but was not found.])])
+
 # Substitute the pkg-config variables into the Makefile
 AC_SUBST([LIBWEBSOCKETS_CFLAGS])
 AC_SUBST([LIBWEBSOCKETS_LIBS])
+AC_SUBST([LIBCURL_CFLAGS])
+AC_SUBST([LIBCURL_LIBS])
 
 # Generate Makefile
 AC_CONFIG_FILES([Makefile])
