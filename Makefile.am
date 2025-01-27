@@ -28,7 +28,8 @@ upload_recordings_LDADD = $(LIBWEBSOCKETS_LIBS) \
   -lfmt \
   -lcurl \
   -lssl \
-  -lcrypto
+  -lcrypto \
+  -lpthread
 
 AM_CXXFLAGS = -std=c++17
 AM_LDFLAGS = -L/usr/lib -L/usr/local/lib

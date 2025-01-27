@@ -76,7 +76,7 @@ void Session::addData(int isBinary, const char *data, size_t len) {
       }
     }
     else {
-      std::cerr << "Unexpected text frame after metadata: " << std::string(data, len) << std::endl;
+      log_->debug("Unexpected text frame after metadata: {}", std::string(data, len));
     }
   }
 }

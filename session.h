@@ -127,6 +127,23 @@ private:
 
         if (buffer_.size() > 0) {
             std::swap(localBuffer, buffer_);
+
+            // Check for misalignment in the swapped buffer
+            size_t numSamples = localBuffer.size() / sizeof(short); // Total samples in localBuffer
+            size_t remainder = numSamples % 2;          // do we have the same num samples for both channels?
+
+            if (remainder != 0) {
+              log_->info("Misaligned buffer: {} samples", numSamples);
+              // Calculate the size of the trailing odd sample (in bytes)
+              size_t leftoverSize = remainder * sizeof(short);
+
+              // Move the trailing sample(s) back to the now-empty buffer_
+              buffer_.insert(buffer_.end(), localBuffer.end() - leftoverSize, localBuffer.end());
+
+              // Remove the trailing sample(s) from localBuffer
+              localBuffer.resize(localBuffer.size() - leftoverSize);
+            }
+
         }
         localClosed = closed_;
 
@@ -143,7 +160,7 @@ private:
             MySQLHelper::getInstance().fetchRecordCredentials(account_sid_)
           );
 
-          spdlog::debug("Record Format: {}", recordCredentials_->recordFormat);
+          log_->debug("Record Format: {}", recordCredentials_->recordFormat);
 
           // Decrypt the bucket credential
           std::string decryptedBucketCredential = cryptoHelper_.decrypt(recordCredentials_->bucketCredential);
