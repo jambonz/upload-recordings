@@ -1,4 +1,5 @@
 #include "azure-uploader.h"
+#include "upload-utils.h"
 #include <iostream>
 #include <sstream>
 #include <iomanip>
@@ -12,25 +13,6 @@
 #include <ctime>
 #include <cstring>
 
-
-// Define the MemoryBuffer structure once
-struct MemoryBuffer {
-    const char* data;
-    size_t size;
-};
-
-// Static read callback function for libcurl
-extern "C" size_t readCallback(void* ptr, size_t size, size_t nmemb, void* userp) {
-    MemoryBuffer* mem = static_cast<MemoryBuffer*>(userp);
-    size_t toRead = std::min(mem->size, size * nmemb);
-
-    // Copy data to the buffer and adjust the pointer and remaining size
-    std::memcpy(ptr, mem->data, toRead);
-    mem->data += toRead;
-    mem->size -= toRead;
-
-    return toRead;
-}
 
 std::string getCurrentDateTimeRFC1123() {
     char buffer[128];
@@ -62,11 +44,12 @@ std::vector<unsigned char> decodeBase64(const std::string& input) {
     return decodedData;
 }
 
-AzureUploader::AzureUploader(RecordFileType ftype, const std::string& connectionString, const std::string& containerName)
+AzureUploader::AzureUploader(std::shared_ptr<spdlog::logger> log, RecordFileType ftype, const std::string& connectionString, const std::string& containerName)
     : recordFileType_(ftype), containerName_(containerName), curl_(curl_easy_init()), headers_(nullptr) {
     if (!curl_) {
         throw std::runtime_error("Failed to initialize CURL.");
     }
+    setLogger(log);
 
     // Parse the connection string
     std::regex regex(R"(DefaultEndpointsProtocol=(https|http);AccountName=([^;]+);AccountKey=([^;]+);EndpointSuffix=([^;]+))");
@@ -82,7 +65,6 @@ AzureUploader::AzureUploader(RecordFileType ftype, const std::string& connection
 
     // Build the base upload URL
     uploadUrl_ = protocol + "://" + accountName_ + ".blob." + endpointSuffix_ + "/" + containerName_ + "/";
-    //std::cout << "Full upload URL: " << uploadUrl_ << std::endl;
 
     // Add standard headers
     headers_ = curl_slist_append(headers_, "Content-Type: application/octet-stream");
@@ -105,7 +87,6 @@ std::string AzureUploader::generateAuthorizationHeader(const std::string& httpMe
     // Extract resource path (e.g., /container/blob)
     std::string resourcePath = url.substr(url.find(".net") + 4); // Get everything after ".net"
     resourcePath = resourcePath.substr(0, resourcePath.find("?")); // Remove query parameters
-    //std::cout << "Resource Path: " << resourcePath << std::endl;
 
     // Extract and sort query parameters (e.g., blockid, comp)
     std::map<std::string, std::string> queryParams;
@@ -144,8 +125,6 @@ std::string AzureUploader::generateAuthorizationHeader(const std::string& httpMe
                  << "x-ms-version:2020-02-10\n"      // x-ms-version header
                  << canonicalizedResource.str();     // Canonicalized resource
 
-    //std::cout << "String to Sign:\n" << stringToSign.str() << std::endl;
-
     // Decode the account key (base64)
     std::vector<unsigned char> decodedKey = decodeBase64(accountKey_);
 
@@ -159,11 +138,9 @@ std::string AzureUploader::generateAuthorizationHeader(const std::string& httpMe
 
     // Encode the HMAC result as Base64
     std::string signature = encodeBase64(std::string(reinterpret_cast<char*>(hmacResult), hmacLength));
-    //std::cout << "Signature: " << signature << std::endl;
 
     // Return the Authorization header
     std::string authorizationHeader = "SharedKey " + accountName_ + ":" + signature;
-    //std::cout << "Final Authorization Header: " << authorizationHeader << std::endl;
     return authorizationHeader;
 }
 
@@ -181,7 +158,7 @@ bool AzureUploader::upload(std::vector<char>& data, bool isFinalChunk) {
 
     // Upload the current block
     if (!uploadBlock(data.data(), data.size(), ++blockCount_)) {
-        std::cerr << "Failed to upload block " << blockCount_ << std::endl;
+        log_->error("Failed to upload block {}", blockCount_);
         upload_failed_ = true;
         return false;
     }
@@ -200,7 +177,6 @@ bool AzureUploader::upload(std::vector<char>& data, bool isFinalChunk) {
 bool AzureUploader::initiateUpload() {
     objectKey_ = createObjectPath(metadata_.call_sid, recordFileType_ == RecordFileType::WAV ? "wav" : "mp3");
     uploadUrl_ += objectKey_;
-    //std::cout << "Initiating upload to Azure: " << uploadUrl_ << std::endl;
     return true;
 }
 
@@ -210,7 +186,6 @@ bool AzureUploader::uploadBlock(const char* data, size_t size, int blockNumber) 
         blockIds_.push_back(blockId);
 
         std::string blockUrl = uploadUrl_ + "?comp=block&blockid=" + curl_easy_escape(curl_, blockId.c_str(), blockId.length());
-        //std::cout << "Uploading Block " << blockNumber << " to URL: " << blockUrl << std::endl;
 
         std::string contentLength = std::to_string(size);
         std::string authorizationHeader = generateAuthorizationHeader("PUT", blockUrl, contentLength);
@@ -225,7 +200,7 @@ bool AzureUploader::uploadBlock(const char* data, size_t size, int blockNumber) 
         curl_easy_setopt(curl_, CURLOPT_READFUNCTION, readCallback);
         curl_easy_setopt(curl_, CURLOPT_READDATA, &buffer);
         curl_easy_setopt(curl_, CURLOPT_INFILESIZE_LARGE, static_cast<curl_off_t>(size));
-        //curl_easy_setopt(curl_, CURLOPT_VERBOSE, 1L);
+        curl_easy_setopt(curl_, CURLOPT_VERBOSE, 0L);
 
         // Set headers
         struct curl_slist* localHeaders = nullptr;
@@ -241,7 +216,7 @@ bool AzureUploader::uploadBlock(const char* data, size_t size, int blockNumber) 
 
         // Check for CURL errors
         if (res != CURLE_OK) {
-            std::cerr << "Failed to upload block: " << curl_easy_strerror(res) << std::endl;
+            log_->error("Failed to upload block: {}", curl_easy_strerror(res));
             return false;
         }
 
@@ -249,14 +224,13 @@ bool AzureUploader::uploadBlock(const char* data, size_t size, int blockNumber) 
         long httpCode = 0;
         curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &httpCode);
         if (httpCode != 201) {
-            std::cerr << "Block upload failed with HTTP code: " << httpCode << std::endl;
+            log_->error("Block upload failed with HTTP code: {}", httpCode);
             return false;
         }
 
-        //std::cout << "Uploaded block " << blockNumber << " successfully." << std::endl;
         return true;
     } catch (const std::exception& ex) {
-        std::cerr << "Exception during block upload: " << ex.what() << std::endl;
+        log_->error("Exception during block upload: {}", ex.what());
         return false;
     }
 }
@@ -277,8 +251,6 @@ bool AzureUploader::finalizeUpload() {
     std::string contentLength = std::to_string(xmlBodyStr.length());
     std::string authorizationHeader = generateAuthorizationHeader("PUT", finalizeUrl, contentLength);
 
-    //std::cout << "Finalizing upload to Azure with URL: " << finalizeUrl << std::endl;
-
     // Set up memory buffer for the XML body
     MemoryBuffer buffer = { xmlBodyStr.c_str(), xmlBodyStr.length() };
 
@@ -291,7 +263,7 @@ bool AzureUploader::finalizeUpload() {
     curl_easy_setopt(curl_, CURLOPT_READFUNCTION, readCallback);
     curl_easy_setopt(curl_, CURLOPT_READDATA, &buffer);
     curl_easy_setopt(curl_, CURLOPT_INFILESIZE_LARGE, static_cast<curl_off_t>(xmlBodyStr.length()));
-    //curl_easy_setopt(curl_, CURLOPT_VERBOSE, 1L);
+    curl_easy_setopt(curl_, CURLOPT_VERBOSE, 0L);
 
     // Set headers
     struct curl_slist* localHeaders = nullptr;
@@ -306,7 +278,7 @@ bool AzureUploader::finalizeUpload() {
     curl_slist_free_all(localHeaders);
 
     if (res != CURLE_OK) {
-        std::cerr << "Failed to finalize upload: " << curl_easy_strerror(res) << std::endl;
+        log_->error("Failed to finalize upload: {}", curl_easy_strerror(res));
         return false;
     }
 
@@ -314,11 +286,11 @@ bool AzureUploader::finalizeUpload() {
     long httpCode = 0;
     curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &httpCode);
     if (httpCode != 201) {
-        std::cerr << "Finalize upload failed with HTTP code: " << httpCode << std::endl;
+        log_->error("Finalize upload failed with HTTP code: {}", httpCode);
         return false;
     }
 
-    //std::cout << "Upload finalized successfully." << std::endl;
+    log_->info("File uploaded successfully: {}", objectKey_);
     return true;
 }
 

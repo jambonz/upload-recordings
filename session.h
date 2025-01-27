@@ -11,6 +11,10 @@
 #include <iostream>
 #include <string>
 #include <memory>
+#include <mutex>
+
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/stdout_sinks.h>
 
 #include <aws/core/external/cjson/cJSON.h>
 
@@ -46,6 +50,10 @@ public:
       return uploadFolder_;
     }
 
+    static int getActiveSessionCount();
+
+    void setContext(const std::string& account_sid, const std::string& call_sid);
+
     // Add data to the session buffer
     void addData(int isBinary, const char *data, size_t len);
 
@@ -59,6 +67,10 @@ private:
   static std::once_flag initFlag_;
   static std::string uploadFolder_;
 
+  static std::atomic<int> activeSessionCount_; // Thread-safe counter
+
+  std::shared_ptr<spdlog::logger> log_;
+
   std::vector<char> buffer_; // Preallocated buffer
   std::mutex mutex_;
   std::condition_variable cv_;
@@ -69,6 +81,7 @@ private:
   cJSON* json_metadata_;
   Metadata_t metadata_;
   std::string account_sid_;
+  std::string call_sid_;
 
   RecordFileType recordFileType_;
   StorageService storage_service_;
@@ -90,9 +103,14 @@ private:
   std::string region_;
   std::string custom_endpoint_;
 
-  // Azure
+  // Azure cloud credentials
   std::string connection_string_;
   std::string container_name_;
+
+  // Google cloud credentials
+  std::string private_key_;
+  std::string client_email_;
+  std::string token_uri_;
 
   // Worker thread function
   void worker() {
@@ -100,7 +118,6 @@ private:
       std::vector<char> localBuffer;
       bool localClosed = false;
 
-      //std::cout << "Worker thread waiting for data..." << std::endl;
       localBuffer.reserve(MAX_BUFFER_SIZE);
       {
         std::unique_lock<std::mutex> lock(mutex_);
@@ -108,7 +125,6 @@ private:
         // Wait for the condition variable to be notified
         cv_.wait(lock, [this] { return buffer_.size() >= BUFFER_PROCESS_SIZE || metadata_received_ || closed_; });
 
-        //std::cout << "Worker thread notified. Buffer size: " << buffer_.size() << ", Metadata received: " << metadata_received_ << ", Closed: " << closed_ << std::endl;
         if (buffer_.size() > 0) {
             std::swap(localBuffer, buffer_);
         }
@@ -116,7 +132,6 @@ private:
 
         // release mutex as we go out of scope so websocket thread can continue to add data
       }
-      //std::cout << "Worker thread has released mutex, processing data...\n";
 
       // Do we have the initial metadata to process ?
       if (metadata_received_) {
@@ -128,12 +143,10 @@ private:
             MySQLHelper::getInstance().fetchRecordCredentials(account_sid_)
           );
 
-          //std::cout << "  Record Format: " << recordCredentials_->recordFormat << std::endl;
+          spdlog::debug("Record Format: {}", recordCredentials_->recordFormat);
 
           // Decrypt the bucket credential
           std::string decryptedBucketCredential = cryptoHelper_.decrypt(recordCredentials_->bucketCredential);
-
-          //std::cout << "Decrypted Bucket Credential: " << decryptedBucketCredential << std::endl;
 
           cJSON* bucketCredentialJson = cJSON_AS4CPP_Parse(decryptedBucketCredential.c_str());
           if (bucketCredentialJson) {
@@ -141,21 +154,26 @@ private:
             if (vendor && cJSON_AS4CPP_IsString(vendor)) {
               if (std::string(vendor->valuestring) == "aws_s3") {
                 storage_service_ = StorageService::AWS_S3;
-                //std::cout << "Using AWS S3 storage service.\n";
+                log_->debug("Using AWS S3 storage service.");
                 parseAwsCredentials(decryptedBucketCredential);
               }
               else if(std::string(vendor->valuestring) == "s3_compatible") {
                 storage_service_ = StorageService::S3_COMPATIBLE;
-                //std::cout << "Using S3 compatible storage service.\n";
+                log_->debug("Using S3 compatible storage service.");
                 parseAwsCredentials(decryptedBucketCredential);
               }
               else if(std::string(vendor->valuestring) == "azure") {
                 storage_service_ = StorageService::AZURE_CLOUD_STORAGE;
-                std::cout << "Using Azure cloud storage service.\n";
+                log_->debug("Using Azure storage service.");
                 parseAzureCredentials(decryptedBucketCredential);
               }
+              else if(std::string(vendor->valuestring) == "google") {
+                storage_service_ = StorageService::GOOGLE_CLOUD_STORAGE;
+                log_->debug("Using Google storage service.");
+                parseGoogleCredentials(decryptedBucketCredential);
+              }
               else {
-                std::cerr << "Unsupported storage service: '" << vendor->valuestring << "'" << std::endl;
+                log_->warn("Unsupported storage service: {}", vendor->valuestring);
               }
             }
             cJSON_AS4CPP_Delete(bucketCredentialJson);
@@ -163,7 +181,7 @@ private:
             if (recordCredentials_->recordFormat == "mp3") {
               recordFileType_ = RecordFileType::MP3;
               mp3Encoder_ = std::make_unique<Mp3Encoder>(metadata_.sample_rate, 2, 128); // 128 kbps
-              //std::cout << "MP3 encoder created.\n";
+              log_->debug("MP3 encoder created.");
             }
             else {
               recordFileType_ = RecordFileType::WAV;
@@ -190,7 +208,6 @@ private:
         }
 
         if (storageUploader_) {
-          //std::cout << "Processing " << std::dec << localBuffer.size() << " bytes of data...\n";
 
           if (!storageUploader_->upload(localBuffer, closed_)) {
               std::cerr << "Upload failed.\n";
@@ -205,11 +222,12 @@ private:
     }
 
     if (storageUploader_) storageUploader_.reset();
-    std::cout << "Worker thread exiting...\n";
+    spdlog::debug("Worker thread exiting");
   }
 
   void parseAwsCredentials(const std::string& credentials) ;
   void parseAzureCredentials(const std::string& credentials) ;
+  void parseGoogleCredentials(const std::string& credentials) ;
   void parseMetadata(cJSON* json) ;
 
   // Factory method for creating a StorageUploader (you can extend this as needed)

@@ -10,7 +10,7 @@
 
 class S3CompatibleUploader : public StorageUploader {
 public:
-    S3CompatibleUploader(std::string& uploadFolder, RecordFileType ftype,
+    S3CompatibleUploader(std::shared_ptr<spdlog::logger> log_, std::string& uploadFolder, RecordFileType ftype,
                          const Aws::Auth::AWSCredentials& credentials, const Aws::String& region,
                          const Aws::String& bucketName, const Aws::String& customEndpoint = "");
     ~S3CompatibleUploader();

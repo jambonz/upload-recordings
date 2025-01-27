@@ -5,19 +5,21 @@
 #include <fstream>
 #include <cstdio>
 
-S3CompatibleUploader::S3CompatibleUploader(std::string& uploadFolder, RecordFileType ftype,
+S3CompatibleUploader::S3CompatibleUploader(std::shared_ptr<spdlog::logger> log, std::string& uploadFolder, RecordFileType ftype,
                                            const Aws::Auth::AWSCredentials& credentials, const Aws::String& region,
                                            const Aws::String& bucketName, const Aws::String& customEndpoint)
     : bucketName_(bucketName), region_(region), recordFileType_(ftype), firstWrite_(true) {
     Aws::S3Crt::ClientConfiguration config;
     config.region = region;
 
+    setLogger(log);
+
     if (!customEndpoint.empty()) {
         config.endpointOverride = customEndpoint;
         config.useVirtualAddressing = false;
-        std::cout << "Creating S3 compatible uploader for bucket: " << bucketName << ", endpoint: " << customEndpoint << std::endl;
+        log_->info("Creating S3 compatible uploader for bucket:{}, endpoint {} ", bucketName, customEndpoint);
     } else {
-        std::cout << "Creating S3 uploader for bucket: " << bucketName << " in region " << region << std::endl;
+        log_->info("Creating S3 uploader for bucket: {} in region {}", bucketName, region);
     }
 
     s3CrtClient_ = std::make_shared<Aws::S3Crt::S3CrtClient>(
@@ -35,25 +37,25 @@ S3CompatibleUploader::~S3CompatibleUploader() {
 
 bool S3CompatibleUploader::upload(std::vector<char>& data, bool isFinalChunk) {
     if (!tempFile_.is_open()) {
-        std::cerr << "Temporary file is not open. Upload failed." << std::endl;
-        upload_failed_ = true;
-        return false;
+      log_->error("Temporary file is not open. Upload failed.");
+      upload_failed_ = true;
+      return false;
     }
 
     if (firstWrite_) {
-        firstWrite_ = false;
+      firstWrite_ = false;
 
-        // Write the WAV header if this is the first write
-        if (recordFileType_ == RecordFileType::WAV) {
-            WavHeaderPrepender headerPrepender(8000, 2, 16);
-            headerPrepender.prependHeader(data);
-        }
+      // Write the WAV header if this is the first write
+      if (recordFileType_ == RecordFileType::WAV) {
+        WavHeaderPrepender headerPrepender(8000, 2, 16);
+        headerPrepender.prependHeader(data);
+      }
     }
 
     // Write the data chunk to the temporary file
     tempFile_.write(data.data(), data.size());
     if (!tempFile_) {
-        std::cerr << "Failed to write data to temporary file." << std::endl;
+        log_->error("Failed to write data to temporary file.");
         upload_failed_ = true;
         return false;
     }
@@ -96,9 +98,9 @@ void S3CompatibleUploader::finalizeUpload() {
     // Upload the file in one go
     auto putObjectOutcome = s3CrtClient_->PutObject(putObjectRequest);
     if (!putObjectOutcome.IsSuccess()) {
-        std::cerr << "Failed to upload file: " << putObjectOutcome.GetError().GetMessage() << std::endl;
+        log_->error("Failed to upload file: {}", putObjectOutcome.GetError().GetMessage());
         upload_failed_ = true;
     } else {
-        std::cout << "File uploaded successfully: " << objectKey_ << std::endl;
+        log_->info("File uploaded successfully: {}", objectKey_);
     }
 }

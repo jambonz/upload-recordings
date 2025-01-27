@@ -8,7 +8,7 @@
 
 class AzureUploader : public StorageUploader {
 public:
-    AzureUploader(RecordFileType ftype,
+    AzureUploader(std::shared_ptr<spdlog::logger> log, RecordFileType ftype,
                   const std::string& connectionString, const std::string& containerName);
     ~AzureUploader();
 

@@ -5,7 +5,12 @@
 #include <string>
 #include <cstdlib>
 #include <atomic>
+
 #include <aws/core/Aws.h>
+
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/stdout_sinks.h>
+#include <memory>
 
 extern const struct lws_protocols protocols[]; // Declare protocols here
 
@@ -41,6 +46,29 @@ int main(int argc, const char **argv) {
     const char *p;
     int n = 0;
 
+    // Create a non-colored stdout sink
+    auto stdout_sink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
+
+    // Create the logger using the non-colored sink
+    auto logger = std::make_shared<spdlog::logger>("uploader", stdout_sink);
+
+    // Set it as the default logger
+    spdlog::set_default_logger(logger);
+
+    // Set the log level from an environment variable
+    const char* env_log_level = std::getenv("LOG_LEVEL");
+    spdlog::level::level_enum level = spdlog::level::info; // Default level: info
+    if (env_log_level) {
+        std::string level_str(env_log_level);
+        if (level_str == "debug") level = spdlog::level::debug;
+        else if (level_str == "info") level = spdlog::level::info;
+        else if (level_str == "warn") level = spdlog::level::warn;
+        else if (level_str == "error") level = spdlog::level::err;
+    }
+    spdlog::set_level(level);
+
+
+
     Aws::SDKOptions options;
     try {
       options.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Debug;
@@ -59,9 +87,8 @@ int main(int argc, const char **argv) {
       }
 
       lws_set_log_level(logs, nullptr);
-      std::cout << "jambonz recording server (ws) | Listening on http://localhost:" << port
-                << " (-s = use TLS / https)\n";
-
+      spdlog::info("jambonz recording server (ws) | Listening on http://localhost:{} (-s = use TLS / https)", port);
+      
       // Initialize info struct
       std::memset(&info, 0, sizeof(info));
       info.port = port;
@@ -74,7 +101,7 @@ int main(int argc, const char **argv) {
 
   #if defined(LWS_WITH_TLS)
       if (lws_cmdline_option(argc, argv, "-s")) {
-          std::cout << "Server using TLS\n";
+          spdlog::info("Server using TLS");
           info.options |= LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT;
           info.ssl_cert_filepath = "localhost-100y.cert";
           info.ssl_private_key_filepath = "localhost-100y.key";

@@ -9,6 +9,10 @@
 #include <fstream>
 #include <filesystem>
 
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/stdout_sinks.h>
+#include <memory>
+
 enum class RecordFileType {
     WAV,
     MP3,
@@ -41,6 +45,10 @@ public:
         metadata_ = metadata;
     }
 
+    void setLogger(std::shared_ptr<spdlog::logger> log) {
+        log_ = log;
+    }
+
 protected:
     // Create a unique temporary file
     void createTempFile(const std::string& uploadFolder);
@@ -50,6 +58,8 @@ protected:
 
     // Create the object path for upload
     std::string createObjectPath(const std::string& callSid, const std::string& recordFormat);
+
+    std::shared_ptr<spdlog::logger> log_;
 
     struct Metadata_t metadata_;
     bool upload_in_progress_ = false;

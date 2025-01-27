@@ -1,21 +1,25 @@
 #include "session.h"
 #include "s3-compatible-uploader.h"
 #include "azure-uploader.h"
+#include "google-uploader.h"
 
 // Static member initialization
 std::once_flag Session::initFlag_;
 std::string Session::uploadFolder_;
 CryptoHelper Session::cryptoHelper_ = CryptoHelper();
+std::atomic<int> Session::activeSessionCount_{0};
 
 Session::Session() : json_metadata_(nullptr), closed_(false), storage_service_(StorageService::UNKNOWN) {
+  ++activeSessionCount_;
+  log_ = spdlog::default_logger()->clone("session_logger");
+
   buffer_.reserve(MAX_BUFFER_SIZE);
   initialize();
   worker_thread_ = std::thread(&Session::worker, this);
-
-  std::cout << "created session" << std::endl;
 }
 
 Session::~Session() {
+  --activeSessionCount_; 
   {
     std::lock_guard<std::mutex> lock(mutex_);
     closed_ = true; // Mark the session as closed
@@ -27,7 +31,20 @@ Session::~Session() {
   if (worker_thread_.joinable()) {
     worker_thread_.join();
   }
-  std::cout << "destroyed session" << std::endl;
+  log_->info("destroyed session, there are now {} active sessions", Session::getActiveSessionCount());
+}
+
+int Session::getActiveSessionCount() {
+    return activeSessionCount_.load(); // Get the current value atomically
+}
+
+void Session::setContext(const std::string& account_sid, const std::string& call_sid) {
+  account_sid_ = account_sid;
+  call_sid_ = call_sid;
+
+  log_->set_pattern(fmt::format("(account_sid: {}, call_sid: {}) %v", account_sid_, call_sid_));
+
+  log_->info("created session, there are now {} active sessions", Session::getActiveSessionCount());
 }
 
 void Session::addData(int isBinary, const char *data, size_t len) {
@@ -54,7 +71,6 @@ void Session::addData(int isBinary, const char *data, size_t len) {
       if (json != nullptr) {
         json_metadata_ = json;
         metadata_received_ = true;
-        //std::cout << "Valid JSON metadata received: " << tmp_ << std::endl;
 
         cv_.notify_all(); // Notify the worker thread to process metadata
       }
@@ -129,6 +145,53 @@ void Session::parseAzureCredentials(const std::string& credentials) {
   cJSON_AS4CPP_Delete(json);
 }
 
+void Session::parseGoogleCredentials(const std::string& credentials) {
+    cJSON* json = cJSON_AS4CPP_Parse(credentials.c_str());
+    if (!json) {
+        std::cerr << "Failed to parse Google credentials JSON.\n";
+        return;
+    }
+
+    // Extract the bucket name
+    cJSON* bucketName = cJSON_AS4CPP_GetObjectItem(json, "name");
+    if (bucketName && cJSON_AS4CPP_IsString(bucketName)) {
+        bucket_name_ = bucketName->valuestring;
+    }
+
+    // Extract the service_key field
+    cJSON* serviceKey = cJSON_AS4CPP_GetObjectItem(json, "service_key");
+    if (serviceKey && cJSON_AS4CPP_IsString(serviceKey)) {
+        cJSON* serviceKeyJson = cJSON_AS4CPP_Parse(serviceKey->valuestring);
+        if (serviceKeyJson) {
+            // Extract the private_key
+            cJSON* privateKey = cJSON_AS4CPP_GetObjectItem(serviceKeyJson, "private_key");
+            if (privateKey && cJSON_AS4CPP_IsString(privateKey)) {
+                private_key_ = privateKey->valuestring;
+            }
+
+            // Extract the client_email
+            cJSON* clientEmail = cJSON_AS4CPP_GetObjectItem(serviceKeyJson, "client_email");
+            if (clientEmail && cJSON_AS4CPP_IsString(clientEmail)) {
+                client_email_ = clientEmail->valuestring;
+            }
+
+            // Extract the token_uri
+            cJSON* tokenUri = cJSON_AS4CPP_GetObjectItem(serviceKeyJson, "token_uri");
+            if (tokenUri && cJSON_AS4CPP_IsString(tokenUri)) {
+                token_uri_ = tokenUri->valuestring;
+            }
+
+            cJSON_AS4CPP_Delete(serviceKeyJson); // Clean up the parsed service key JSON
+        } else {
+            std::cerr << "Failed to parse service_key JSON.\n";
+        }
+    }
+
+    log_->debug("parseGoogleCredentials: bucket_name = {}", bucket_name_);
+
+    cJSON_AS4CPP_Delete(json); // Clean up the main JSON object
+}
+
 void Session::parseMetadata(cJSON* json) {
   if (!json) {
     std::cerr << "Invalid JSON object for metadata parsing.\n";
@@ -147,7 +210,7 @@ void Session::parseMetadata(cJSON* json) {
 
   cJSON* callSid = cJSON_AS4CPP_GetObjectItem(json, "callSid");
   if (callSid && cJSON_AS4CPP_IsString(callSid)) {
-    metadata_.call_sid = callSid->valuestring;
+    metadata_.call_sid = call_sid_ = callSid->valuestring;
   }
 
   cJSON* direction = cJSON_AS4CPP_GetObjectItem(json, "direction");
@@ -179,39 +242,55 @@ void Session::parseMetadata(cJSON* json) {
   if (originatingSipTrunkName && cJSON_AS4CPP_IsString(originatingSipTrunkName)) {
     metadata_.originating_sip_trunk_name = originatingSipTrunkName->valuestring;
   }
+
+  setContext(account_sid_, call_sid_);
 }
 
 std::unique_ptr<StorageUploader> Session::createStorageUploader(RecordFileType ftype) {
-  switch (storage_service_) {
+  try {
+    switch (storage_service_) {
       case StorageService::AWS_S3:
         return std::make_unique<S3CompatibleUploader>(
-            uploadFolder_,
-            ftype,
-            Aws::Auth::AWSCredentials(access_key_, secret_key_),
-            region_,
-            bucket_name_
+          log_,
+          uploadFolder_,
+          ftype,
+          Aws::Auth::AWSCredentials(access_key_, secret_key_),
+          region_,
+          bucket_name_
         );
 
       case StorageService::S3_COMPATIBLE:
         return std::make_unique<S3CompatibleUploader>(
-            uploadFolder_,
-            ftype,
-            Aws::Auth::AWSCredentials(access_key_, secret_key_),
-            region_,
-            bucket_name_,
-            custom_endpoint_
+          log_,
+          uploadFolder_,
+          ftype,
+          Aws::Auth::AWSCredentials(access_key_, secret_key_),
+          region_,
+          bucket_name_,
+          custom_endpoint_
         );
-      case StorageService::GOOGLE_CLOUD_STORAGE:
-          std::cerr << "Google Cloud Storage uploader not implemented yet.\n";
-          return nullptr;
       case StorageService::AZURE_CLOUD_STORAGE:
         return std::make_unique<AzureUploader>(
-            ftype,
-            connection_string_,
-            container_name_
+          log_,
+          ftype,
+          connection_string_,
+          container_name_
+        );
+      case StorageService::GOOGLE_CLOUD_STORAGE:
+        return std::make_unique<GoogleUploader>(
+          log_,
+          ftype,
+          bucket_name_,
+          client_email_,
+          private_key_,
+          token_uri_
         );
       default:
-          std::cerr << "Unknown storage service.\n";
-          return nullptr;
+        std::cerr << "Unknown storage service.\n";
+        return nullptr;
+    }
+  } catch (const std::exception &e) {
+    log_->error("Failed to create storage uploader: {}", e.what());
+    return nullptr;
   }
 }
