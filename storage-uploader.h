@@ -8,6 +8,7 @@
 #include <ctime>
 #include <fstream>
 #include <filesystem>
+#include <atomic>
 
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_sinks.h>
@@ -67,6 +68,9 @@ protected:
 
     std::string tempFilePath_;
     std::ofstream tempFile_;
+
+    // Static atomic counter for generating unique file names
+    static std::atomic<int> uniqueCounter;
 };
 
 #endif // STORAGE_UPLOADER_H

@@ -6,6 +6,8 @@
 
 namespace fs = std::filesystem;
 
+std::atomic<int> StorageUploader::uniqueCounter{0};
+
 void StorageUploader::createTempFile(const std::string& uploadFolder) {
     try {
         // Determine the directory for the temp file
@@ -14,8 +16,9 @@ void StorageUploader::createTempFile(const std::string& uploadFolder) {
         // Seed the random number generator for uniqueness
         std::srand(static_cast<unsigned int>(std::time(nullptr)));
 
-        // Generate a unique file name
-        std::string uniqueName = "upload-" + std::to_string(std::rand()) + ".tmp";
+        // Generate a unique file name using the static atomic counter
+        int counterValue = uniqueCounter.fetch_add(1, std::memory_order_relaxed);
+        std::string uniqueName = "upload-" + std::to_string(counterValue) + ".tmp";
         fs::path tempFilePath = tempDir / uniqueName;
 
         // Open the temporary file for writing
