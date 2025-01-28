@@ -27,6 +27,16 @@ PKG_CHECK_MODULES([LIBCURL], [libcurl >= 7.0],
   [],
   [AC_MSG_ERROR([libcurl >= 7.0 is required but was not found.])])
 
+# optional linking with tcmalloc
+AC_ARG_ENABLE([tcmalloc],
+[  --enable-tcmalloc    Link with tcmalloc (requires libgoogle-perftools-dev)],
+[case "${enableval}" in
+  yes) tcmalloc=true ;;
+  no)  tcmalloc=false ;;
+  *) AC_MSG_ERROR([bad value ${enableval} for --enable-tcmalloc]) ;;
+esac],[tcmalloc=false])
+AM_CONDITIONAL([TCMALLOC], [test x$tcmalloc = xtrue])
+
 # Substitute the pkg-config variables into the Makefile
 AC_SUBST([LIBWEBSOCKETS_CFLAGS])
 AC_SUBST([LIBWEBSOCKETS_LIBS])

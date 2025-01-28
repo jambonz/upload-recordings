@@ -11,7 +11,12 @@ std::atomic<int> Session::activeSessionCount_{0};
 
 Session::Session() : json_metadata_(nullptr), closed_(false), storage_service_(StorageService::UNKNOWN) {
   ++activeSessionCount_;
-  log_ = spdlog::default_logger()->clone("session_logger");
+
+  // Create a unique sink for this session
+  auto sink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
+  
+  // Create a logger with its own sink
+  log_ = std::make_shared<spdlog::logger>("session_logger", sink);
 
   buffer_.reserve(MAX_BUFFER_SIZE);
   initialize();

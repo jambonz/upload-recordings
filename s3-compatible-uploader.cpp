@@ -91,8 +91,19 @@ void S3CompatibleUploader::finalizeUpload() {
 
     putObjectRequest.SetMetadata(awsMetadata);
 
+    // Close the file stream if it is still open
+    if (tempFile_.is_open()) {
+     tempFile_.close();
+    }
+
     // Attach the file stream to the request body
     auto inputStream = Aws::MakeShared<Aws::FStream>("PutObjectBody", tempFilePath_.c_str(), std::ios::in | std::ios::binary);
+    if (!inputStream->good()) {
+        log_->error("Failed to open temporary file for upload: {}", tempFilePath_);
+        upload_failed_ = true;
+        return;
+    }
+  
     putObjectRequest.SetBody(inputStream);
 
     // Upload the file in one go
