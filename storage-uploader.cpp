@@ -25,7 +25,7 @@ void StorageUploader::createTempFile(const std::string& uploadFolder) {
         }
 
         tempFilePath_ = tempFilePath.string();
-        log_->debug("Temporary file created:{}", tempFilePath_);
+        log_->info("Temporary file created:{}", tempFilePath_);
     } catch (const fs::filesystem_error& e) {
         throw std::runtime_error("Filesystem error while creating temporary file: " + std::string(e.what()));
     }
@@ -38,7 +38,7 @@ void StorageUploader::cleanupTempFile() {
     }
     if (!tempFilePath_.empty()) {
         std::remove(tempFilePath_.c_str());
-        log_->debug("Temporary file cleaned up: {}", tempFilePath_);
+        log_->info("Temporary file cleaned up: {}", tempFilePath_);
         tempFilePath_.clear();
     }
 }

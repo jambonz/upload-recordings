@@ -99,9 +99,25 @@ void S3CompatibleUploader::finalizeUpload() {
     // Attach the file stream to the request body
     auto inputStream = Aws::MakeShared<Aws::FStream>("PutObjectBody", tempFilePath_.c_str(), std::ios::in | std::ios::binary);
     if (!inputStream->good()) {
-        log_->error("Failed to open temporary file for upload: {}", tempFilePath_);
-        upload_failed_ = true;
-        return;
+      // Retrieve specific error details
+      std::string errorMessage;
+
+      if ((inputStream->rdstate() & std::ios::failbit) != 0) {
+          errorMessage += "Logical error on input/output operation. ";
+      }
+      if ((inputStream->rdstate() & std::ios::badbit) != 0) {
+          errorMessage += "Read/write error on file stream. ";
+      }
+      if ((inputStream->rdstate() & std::ios::eofbit) != 0) {
+          errorMessage += "End-of-File reached prematurely. ";
+      }
+
+      // Use errno to get a system-level error message
+      errorMessage += std::strerror(errno);
+
+      log_->error("Failed to open temporary file for upload: {}. Error: {}", tempFilePath_, errorMessage);
+      upload_failed_ = true;
+      return;
     }
   
     putObjectRequest.SetBody(inputStream);

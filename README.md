@@ -10,7 +10,7 @@ Install libraries for mp3 decoding, mysql database access, and crypto stuff.
 
 ```bash
 sudo apt-get update
-sudo apt install libcjson-dev libmp3lame-dev libmysqlcppconn-dev libspdlog-dev libfmt-dev libssl-dev 
+sudo apt install libcjson-dev libmp3lame-dev libmysqlcppconn-dev libspdlog-dev libfmt-dev libssl-dev libgoogle-perftools-dev
 ```
 
 Install and build libwebsockets.
@@ -24,7 +24,7 @@ mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo && make
  Install and build AWS C++ sdk
  ```bash
  cd /usr/local/src
- git https://github.com/aws/aws-sdk-cpp
+ git clone https://github.com/aws/aws-sdk-cpp
  cd aws-sdk-cpp
  git submodule update --init --recursive
  mkdir -p build && cd build
@@ -41,7 +41,7 @@ git clone https://github.com/jambonz/upload-recordings.git
 cd upload-recordings
 autoreconf -fi
 mkdir build && cd $_
-../configure
+../configure  --enable-tcmalloc=yes CXXFLAGS='-g -O2'
 make
 sudo make install
 ```
