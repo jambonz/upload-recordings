@@ -18,7 +18,6 @@ public:
     bool upload(std::vector<char>& data, bool isFinalChunk = false) override;
 
 private:
-    bool firstWrite_;
     RecordFileType recordFileType_;
     Aws::String bucketName_;
     Aws::String region_;

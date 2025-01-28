@@ -20,12 +20,6 @@ public:
         // Insert the header at the beginning of the audio data vector
         audioData.insert(audioData.begin(), header.begin(), header.end());
     }
-
-private:
-    uint32_t sampleRate_;
-    uint16_t numChannels_;
-    uint16_t bitsPerSample_;
-
     // Generate the WAV header for a given data size
     std::vector<char> createHeader(uint32_t dataSize) const {
         std::vector<char> header(44, 0);
@@ -57,6 +51,11 @@ private:
 
         return header;
     }
+
+private:
+    uint32_t sampleRate_;
+    uint16_t numChannels_;
+    uint16_t bitsPerSample_;
 };
 
 #endif // WAV_HEADER_H

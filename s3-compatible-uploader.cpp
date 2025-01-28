@@ -8,7 +8,7 @@
 S3CompatibleUploader::S3CompatibleUploader(std::shared_ptr<spdlog::logger> log, std::string& uploadFolder, RecordFileType ftype,
                                            const Aws::Auth::AWSCredentials& credentials, const Aws::String& region,
                                            const Aws::String& bucketName, const Aws::String& customEndpoint)
-    : bucketName_(bucketName), region_(region), recordFileType_(ftype), firstWrite_(true) {
+    : bucketName_(bucketName), region_(region), recordFileType_(ftype) {
     Aws::S3Crt::ClientConfiguration config;
     config.region = region;
 
@@ -40,16 +40,6 @@ bool S3CompatibleUploader::upload(std::vector<char>& data, bool isFinalChunk) {
       log_->error("Temporary file is not open. Upload failed.");
       upload_failed_ = true;
       return false;
-    }
-
-    if (firstWrite_) {
-      firstWrite_ = false;
-
-      // Write the WAV header if this is the first write
-      if (recordFileType_ == RecordFileType::WAV) {
-        WavHeaderPrepender headerPrepender(8000, 2, 16);
-        headerPrepender.prependHeader(data);
-      }
     }
 
     // Write the data chunk to the temporary file
@@ -102,8 +92,65 @@ void S3CompatibleUploader::finalizeUpload() {
      tempFile_.close();
     }
 
+    // if this is a WAV file, we need to prepend a wave header
+    std::string finalFilePath = tempFilePath_;
+    if (recordFileType_ == RecordFileType::WAV) {
+        // Use mkstemp to generate a unique temporary file for the WAV file
+        char wavTempFilePath[] = "/tmp/uploads/wavfile-XXXXXX"; // Template for unique file
+        int wavTempFd = mkstemp(wavTempFilePath); // Creates the file and returns a file descriptor
+        if (wavTempFd == -1) {
+            log_->error("Failed to create unique WAV temporary file using mkstemp: {}", strerror(errno));
+            upload_failed_ = true;
+            return;
+        }
+
+        // Open the file stream associated with the descriptor
+        std::ofstream wavTempFile(wavTempFilePath, std::ios::binary);
+        if (!wavTempFile) {
+            log_->error("Failed to open WAV temporary file: {}", wavTempFilePath);
+            close(wavTempFd); // Close the file descriptor
+            upload_failed_ = true;
+            return;
+        }
+
+        // Calculate the size of the raw audio data
+        auto audioDataSize = std::filesystem::file_size(tempFilePath_);
+
+        // Generate the WAV header
+        WavHeaderPrepender headerPrepender(8000, 2, 16); // Sample rate, channels, bit depth
+        std::vector<char> wavHeader = headerPrepender.createHeader(static_cast<uint32_t>(audioDataSize));
+
+        // Write the WAV header to the new temporary file
+        wavTempFile.write(wavHeader.data(), wavHeader.size());
+        if (!wavTempFile.good()) {
+            log_->error("Failed to write WAV header to temporary file: {}", wavTempFilePath);
+            close(wavTempFd); // Close the file descriptor
+            upload_failed_ = true;
+            return;
+        }
+
+        // Append the raw audio data to the new temporary file
+        std::ifstream rawAudioFile(tempFilePath_, std::ios::binary);
+        if (!rawAudioFile) {
+            log_->error("Failed to open raw audio temporary file: {}", tempFilePath_);
+            close(wavTempFd); // Close the file descriptor
+            upload_failed_ = true;
+            return;
+        }
+
+        wavTempFile << rawAudioFile.rdbuf(); // Efficiently copy raw audio data
+        wavTempFile.close();
+        rawAudioFile.close();
+        close(wavTempFd); // Close the descriptor after all writes
+
+        log_->info("WAV file created with header at: {}", wavTempFilePath);
+
+        // Update the final file path to point to the new WAV file
+        finalFilePath = wavTempFilePath;
+    }
+
     // Attach the file stream to the request body
-    auto inputStream = Aws::MakeShared<Aws::FStream>("PutObjectBody", tempFilePath_.c_str(), std::ios::in | std::ios::binary);
+    auto inputStream = Aws::MakeShared<Aws::FStream>("PutObjectBody", finalFilePath.c_str(), std::ios::in | std::ios::binary);
     if (!inputStream->good()) {
       // Retrieve specific error details
       std::string errorMessage;
@@ -135,5 +182,8 @@ void S3CompatibleUploader::finalizeUpload() {
         upload_failed_ = true;
     } else {
         log_->info("File uploaded successfully: {} to {}", tempFilePath_, objectKey_);
+    }
+    if (recordFileType_ == RecordFileType::WAV) {
+        std::remove(finalFilePath.c_str());
     }
 }
