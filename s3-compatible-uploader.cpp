@@ -54,15 +54,21 @@ bool S3CompatibleUploader::upload(std::vector<char>& data, bool isFinalChunk) {
 
     // Write the data chunk to the temporary file
     tempFile_.write(data.data(), data.size());
-    if (!tempFile_) {
-        log_->error("Failed to write data to temporary file.");
-        upload_failed_ = true;
-        return false;
+    if (!tempFile_.good()) {
+      if (tempFile_.fail()) {
+          log_->error("Logical error occurred while writing data to temporary file.");
+      }
+      if (tempFile_.bad()) {
+          log_->error("Critical I/O error occurred while writing data to temporary file.");
+      }
+      upload_failed_ = true;
+      return false;
     }
     tempFile_.flush();
 
+    log_->info("S3CompatibleUploader uploaded {} bytes to temporary file {}.", data.size(), tempFilePath_);
+
     if (isFinalChunk) {
-        tempFile_.close(); // Ensure all data is flushed to disk
         finalizeUpload();
     }
 
@@ -125,9 +131,9 @@ void S3CompatibleUploader::finalizeUpload() {
     // Upload the file in one go
     auto putObjectOutcome = s3CrtClient_->PutObject(putObjectRequest);
     if (!putObjectOutcome.IsSuccess()) {
-        log_->error("Failed to upload file: {}", putObjectOutcome.GetError().GetMessage());
+        log_->error("S3CompatibleUploader Failed to upload file: {}: {}", tempFilePath_, putObjectOutcome.GetError().GetMessage());
         upload_failed_ = true;
     } else {
-        log_->info("File uploaded successfully: {}", objectKey_);
+        log_->info("File uploaded successfully: {} to {}", tempFilePath_, objectKey_);
     }
 }

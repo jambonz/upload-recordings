@@ -13,9 +13,6 @@ void StorageUploader::createTempFile(const std::string& uploadFolder) {
         // Determine the directory for the temp file
         fs::path tempDir = uploadFolder.empty() ? fs::temp_directory_path() : fs::path(uploadFolder);
 
-        // Seed the random number generator for uniqueness
-        std::srand(static_cast<unsigned int>(std::time(nullptr)));
-
         // Generate a unique file name using the static atomic counter
         int counterValue = uniqueCounter.fetch_add(1, std::memory_order_relaxed);
         std::string uniqueName = "upload-" + std::to_string(counterValue) + ".tmp";
