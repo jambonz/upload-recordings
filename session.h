@@ -207,7 +207,7 @@ private:
 
           // Update bucket name or other information based on the record credentials
         } catch (const std::exception &e) {
-          std::cerr << "Failed to fetch or decrypt record credentials: " << e.what() << std::endl;
+          log_->warn("Failed to fetch or decrypt record credentials: {}", e.what());
           throw; // Re-throw the exception for higher-level handling if necessary
         }
       }
@@ -227,19 +227,19 @@ private:
         if (storageUploader_) {
 
           if (!storageUploader_->upload(localBuffer, closed_)) {
-              std::cerr << "Upload failed.\n";
+            log_->warn("Upload failed.");
           }
         }
       }
 
       // Are we closing ?
-      if (localClosed && localBuffer.empty()) {
+      if (localClosed /*&& localBuffer.empty()*/) {
         break;
       }
     }
+    log_->info("Worker thread exiting");
 
     if (storageUploader_) storageUploader_.reset();
-    spdlog::debug("Worker thread exiting");
   }
 
   void parseAwsCredentials(const std::string& credentials) ;

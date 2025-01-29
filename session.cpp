@@ -32,7 +32,7 @@ Session::~Session() {
   if (json_metadata_) {
     cJSON_AS4CPP_Delete(json_metadata_);
   }
-  cv_.notify_all(); // Wake up the worker thread
+  cv_.notify_one(); // Wake up the worker thread
   if (worker_thread_.joinable()) {
     worker_thread_.join();
   }
@@ -67,7 +67,7 @@ void Session::addData(int isBinary, const char *data, size_t len) {
 
       // Notify the worker thread if the buffer size reaches the threshold
       if (buffer_.size() >= BUFFER_PROCESS_SIZE) {
-        cv_.notify_all();
+        cv_.notify_one();
       }
     } 
     else if (!json_metadata_) {
@@ -77,7 +77,7 @@ void Session::addData(int isBinary, const char *data, size_t len) {
         json_metadata_ = json;
         metadata_received_ = true;
 
-        cv_.notify_all(); // Notify the worker thread to process metadata
+        cv_.notify_one(); // Notify the worker thread to process metadata
       }
     }
     else {
@@ -91,7 +91,7 @@ void Session::notifyClose() {
     std::lock_guard<std::mutex> lock(mutex_);
     closed_ = true;
   }
-  cv_.notify_all();
+  cv_.notify_one();
 }
 
 void Session::parseAwsCredentials(const std::string& credentials) {

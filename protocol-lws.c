@@ -124,7 +124,7 @@ callback_minimal(struct lws *wsi, enum lws_callback_reasons reason,
 
     case LWS_CALLBACK_CLOSED:
         if (pss->session) {
-            notify_session_close(pss->session);
+            //notify_session_close(pss->session);
             destroy_session(pss->session);
             pss->session = NULL;
         }
