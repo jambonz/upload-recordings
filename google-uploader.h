@@ -8,7 +8,9 @@
 
 class GoogleUploader : public StorageUploader {
 public:
-    GoogleUploader(std::shared_ptr<spdlog::logger> log, RecordFileType ftype, const std::string& bucketName, const std::string& clientEmail, const std::string& privateKey, const std::string& tokenUri);
+    GoogleUploader(std::shared_ptr<spdlog::logger> log, std::string& uploadFolder, 
+      RecordFileType ftype, const std::string& bucketName, const std::string& clientEmail, 
+      const std::string& privateKey, const std::string& tokenUri);
     ~GoogleUploader();
 
     bool upload(std::vector<char>& data, bool isFinalChunk = false) override;
@@ -18,8 +20,9 @@ public:
 private:
     std::string generateOAuthToken(); // Generate an OAuth 2.0 token
     std::string initiateResumableUpload(); // Start a resumable upload session
-    bool uploadChunk(const char* data, size_t size); // Upload a single chunk
-    bool finalizeUpload(); // Finalize the resumable upload
+    bool uploadFileInChunks(const std::string &filePath, const std::string &sessionUrl);
+    bool uploadChunkWithRange(const std::string &sessionUrl, const char* data, size_t dataSize, size_t offset, size_t totalSize);
+    void finalizeUpload(); 
 
     std::string clientEmail_;
     std::string privateKey_;
@@ -34,6 +37,7 @@ private:
     struct curl_slist* headers_;
 
     static size_t writeCallback(void* contents, size_t size, size_t nmemb, void* userp);
+
 };
 
 #endif // GOOGLE_UPLOADER_H

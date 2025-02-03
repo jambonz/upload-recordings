@@ -1,3 +1,5 @@
+MYVERSION=$(shell git describe --always 2>/dev/null || echo 1.0.0)
+
 bin_PROGRAMS = upload_recordings
 
 upload_recordings_SOURCES = main.cpp \
@@ -16,7 +18,8 @@ upload_recordings_CPPFLAGS = $(LIBWEBSOCKETS_CFLAGS) \
   -I/usr/include/cppconn \
   -I/usr/include/aws-sdk-cpp \
   -I/usr/include/spdlog \
-  -I/usr/include/curl
+  -I/usr/include/curl \
+  -DUPLOADER_VERSION=\"$(MYVERSION)\"
 
 upload_recordings_LDADD = $(LIBWEBSOCKETS_LIBS) \
   -lmp3lame \

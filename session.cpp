@@ -277,6 +277,7 @@ std::unique_ptr<StorageUploader> Session::createStorageUploader(RecordFileType f
       case StorageService::AZURE_CLOUD_STORAGE:
         return std::make_unique<AzureUploader>(
           log_,
+          uploadFolder_,
           ftype,
           connection_string_,
           container_name_
@@ -284,6 +285,7 @@ std::unique_ptr<StorageUploader> Session::createStorageUploader(RecordFileType f
       case StorageService::GOOGLE_CLOUD_STORAGE:
         return std::make_unique<GoogleUploader>(
           log_,
+          uploadFolder_,
           ftype,
           bucket_name_,
           client_email_,

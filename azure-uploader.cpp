@@ -1,5 +1,7 @@
 #include "azure-uploader.h"
 #include "upload-utils.h"
+#include "wav-header.h"  
+
 #include <iostream>
 #include <sstream>
 #include <iomanip>
@@ -44,42 +46,296 @@ std::vector<unsigned char> decodeBase64(const std::string& input) {
     return decodedData;
 }
 
-AzureUploader::AzureUploader(std::shared_ptr<spdlog::logger> log, RecordFileType ftype, const std::string& connectionString, const std::string& containerName)
-    : recordFileType_(ftype), containerName_(containerName), curl_(curl_easy_init()), headers_(nullptr) {
-    if (!curl_) {
-        throw std::runtime_error("Failed to initialize CURL.");
-    }
-    setLogger(log);
+AzureUploader::AzureUploader(std::shared_ptr<spdlog::logger> log, std::string& uploadFolder, RecordFileType ftype, 
+  const std::string& connectionString, const std::string& containerName)
+  : recordFileType_(ftype),
+      containerName_(containerName),
+      curl_(curl_easy_init()),
+      headers_(nullptr),
+      blockSize_(4 * 1024 * 1024)  
+{
+  if (!curl_) {
+      throw std::runtime_error("Failed to initialize CURL.");
+  }
+  setLogger(log);
 
-    // Parse the connection string
-    std::regex regex(R"(DefaultEndpointsProtocol=(https|http);AccountName=([^;]+);AccountKey=([^;]+);EndpointSuffix=([^;]+))");
-    std::smatch match;
-    if (!std::regex_match(connectionString, match, regex)) {
-        throw std::runtime_error("Invalid connection string format.");
-    }
+  // Parse the connection string
+  std::regex regex(R"(DefaultEndpointsProtocol=(https|http);AccountName=([^;]+);AccountKey=([^;]+);EndpointSuffix=([^;]+))");
+  std::smatch match;
+  if (!std::regex_match(connectionString, match, regex)) {
+      throw std::runtime_error("Invalid connection string format.");
+  }
 
-    std::string protocol = match[1];
-    accountName_ = match[2];
-    accountKey_ = match[3];
-    endpointSuffix_ = match[4];
+  std::string protocol = match[1];
+  accountName_ = match[2];
+  accountKey_ = match[3];
+  endpointSuffix_ = match[4];
 
-    // Build the base upload URL
-    uploadUrl_ = protocol + "://" + accountName_ + ".blob." + endpointSuffix_ + "/" + containerName_ + "/";
+  // Build the base upload URL
+  uploadUrlBase_ = protocol + "://" + accountName_ + ".blob." + endpointSuffix_ + "/" + containerName_ + "/";
 
-    // Add standard headers
-    headers_ = curl_slist_append(headers_, "Content-Type: application/octet-stream");
+  // Add standard headers
+  headers_ = curl_slist_append(headers_, "Content-Type: application/octet-stream");
 
-   // Set the x-ms-date
-    xMsDate_ = getCurrentDateTimeRFC1123();
+  // Set the x-ms-date
+  xMsDate_ = getCurrentDateTimeRFC1123();
+
+  createTempFile(uploadFolder);
 }
 
 AzureUploader::~AzureUploader() {
     if (headers_) {
-        curl_slist_free_all(headers_);
+      curl_slist_free_all(headers_);
     }
     if (curl_) {
-        curl_easy_cleanup(curl_);
+      curl_easy_cleanup(curl_);
     }
+    cleanupTempFile();
+}
+
+bool AzureUploader::upload(std::vector<char>& data, bool isFinalChunk) {
+  if (upload_failed_) return false;
+
+  if (!tempFile_.is_open()) {
+      log_->error("Temporary file is not open. Upload failed.");
+      upload_failed_ = true;
+      return false;
+  }
+
+  // Write data to temporary file.
+  tempFile_.write(data.data(), data.size());
+  if (!tempFile_.good()) {
+      log_->error("Error writing to temporary file: {}", tempFilePath_);
+      upload_failed_ = true;
+      return false;
+  }
+  tempFile_.flush();
+  log_->info("Buffered {} bytes to temporary file {}.", data.size(), tempFilePath_);
+
+  if (isFinalChunk) {
+    tempFile_.close();
+    std::string finalFilePath = tempFilePath_;
+
+    objectKey_ = createObjectPath(metadata_.call_sid,
+                              recordFileType_ == RecordFileType::WAV ? "wav" : "mp3");
+
+    // If the file is WAV, create a new temporary file with the proper WAV header.
+    if (recordFileType_ == RecordFileType::WAV) {
+      char wavTempFilePath[] = "/tmp/azure-wavfile-XXXXXX";
+      int wavTempFd = mkstemp(wavTempFilePath);
+      if (wavTempFd == -1) {
+        log_->error("Failed to create unique WAV temporary file: {}", std::strerror(errno));
+        upload_failed_ = true;
+        return false;
+      }
+      std::ofstream wavTempFile(wavTempFilePath, std::ios::binary);
+      if (!wavTempFile) {
+        log_->error("Failed to open WAV temporary file: {}", wavTempFilePath);
+        close(wavTempFd);
+        upload_failed_ = true;
+        return false;
+      }
+      // Determine the size of the raw audio.
+      auto audioDataSize = std::filesystem::file_size(tempFilePath_);
+      // Generate the WAV header (using your existing header class).
+      WavHeaderPrepender headerPrepender(8000, 2, 16); // sample rate, channels, bit depth
+      std::vector<char> wavHeader = headerPrepender.createHeader(static_cast<uint32_t>(audioDataSize));
+      // Write header then raw audio.
+      wavTempFile.write(wavHeader.data(), wavHeader.size());
+      if (!wavTempFile.good()) {
+        log_->error("Failed to write WAV header to temporary file: {}", wavTempFilePath);
+        close(wavTempFd);
+        upload_failed_ = true;
+        return false;
+      }
+      std::ifstream rawAudioFile(tempFilePath_, std::ios::binary);
+      if (!rawAudioFile) {
+        log_->error("Failed to open raw audio temporary file: {}", tempFilePath_);
+        close(wavTempFd);
+        upload_failed_ = true;
+        return false;
+      }
+      wavTempFile << rawAudioFile.rdbuf();
+      wavTempFile.close();
+      rawAudioFile.close();
+      close(wavTempFd);
+      log_->info("WAV file created with header at: {}", wavTempFilePath);
+      finalFilePath = wavTempFilePath;
+    }
+
+    // Build the full upload URL.
+    uploadUrl_ = uploadUrlBase_ + objectKey_;
+
+    // Clear any previous block IDs.
+    blockIds_.clear();
+
+    // Upload the file in blocks.
+    if (!uploadFileInBlocks(finalFilePath)) {
+      log_->error("Failed to upload file in blocks: {}", finalFilePath);
+      upload_failed_ = true;
+      return false;
+    }
+    // Commit the block list.
+    if (!commitBlockList()) {
+      log_->error("Failed to commit block list for blob: {}", objectKey_);
+      upload_failed_ = true;
+      return false;
+    }
+
+    log_->info("File uploaded successfully: {}", objectKey_);
+    // If we created a new WAV file, delete it.
+    if (recordFileType_ == RecordFileType::WAV) {
+      std::remove(finalFilePath.c_str());
+    }
+    // Clean up the buffering temp file.
+    cleanupTempFile();
+    upload_in_progress_ = false;
+  }
+
+  return true;
+}
+
+bool AzureUploader::uploadFileInBlocks(const std::string &filePath) {
+  std::ifstream file(filePath, std::ios::binary);
+  if (!file) {
+    log_->error("Failed to open file for block upload: {}", filePath);
+    return false;
+  }
+  // Determine total file size.
+  file.seekg(0, std::ios::end);
+  size_t totalSize = file.tellg();
+  file.seekg(0, std::ios::beg);
+
+  size_t offset = 0;
+  int blockNumber = 0;
+  std::vector<char> buffer;
+  buffer.resize(blockSize_);
+
+  while (offset < totalSize) {
+    size_t currentBlockSize = std::min(blockSize_, totalSize - offset);
+    file.read(buffer.data(), currentBlockSize);
+    if (!file) {
+      log_->error("Error reading file block from: {}", filePath);
+      return false;
+    }
+    blockNumber++;
+    // Generate a block ID.
+    std::string blockId = generateBlockId(blockNumber);
+    blockIds_.push_back(blockId);
+    // Upload this block.
+    if (!uploadBlock(buffer.data(), currentBlockSize, blockId)) {
+      log_->error("Failed to upload block {} at offset {}", blockNumber, offset);
+      return false;
+    }
+    offset += currentBlockSize;
+  }
+  return true;
+}
+
+bool AzureUploader::uploadBlock(const char* data, size_t size, const std::string &blockId) {
+  try {
+    // Build the block upload URL.
+    // Note: curl_easy_escape is used to URL-encode the blockId.
+    char* encodedBlockId = curl_easy_escape(curl_, blockId.c_str(), blockId.length());
+    std::string blockUrl = uploadUrl_ + "?comp=block&blockid=" + std::string(encodedBlockId);
+    curl_free(encodedBlockId);
+
+    std::string contentLength = std::to_string(size);
+    std::string authorizationHeader = generateAuthorizationHeader("PUT", blockUrl, contentLength);
+
+    // Reset and configure CURL.
+    curl_easy_reset(curl_);
+    curl_easy_setopt(curl_, CURLOPT_URL, blockUrl.c_str());
+    curl_easy_setopt(curl_, CURLOPT_UPLOAD, 1L);
+
+    MemoryBuffer buffer = { data, size };
+    curl_easy_setopt(curl_, CURLOPT_READFUNCTION, readCallback);
+    curl_easy_setopt(curl_, CURLOPT_READDATA, &buffer);
+    curl_easy_setopt(curl_, CURLOPT_INFILESIZE_LARGE, static_cast<curl_off_t>(size));
+    curl_easy_setopt(curl_, CURLOPT_VERBOSE, 0L);
+
+    // Set headers.
+    struct curl_slist* localHeaders = nullptr;
+    localHeaders = curl_slist_append(localHeaders, "Content-Type: application/octet-stream");
+    localHeaders = curl_slist_append(localHeaders, ("Authorization: " + authorizationHeader).c_str());
+    localHeaders = curl_slist_append(localHeaders, ("x-ms-date: " + xMsDate_).c_str());
+    localHeaders = curl_slist_append(localHeaders, "x-ms-version: 2020-02-10");
+    curl_easy_setopt(curl_, CURLOPT_HTTPHEADER, localHeaders);
+
+    // Perform the block upload.
+    CURLcode res = curl_easy_perform(curl_);
+    curl_slist_free_all(localHeaders);
+
+    if (res != CURLE_OK) {
+      log_->error("Failed to upload block ({}): {}", blockId, curl_easy_strerror(res));
+      return false;
+    }
+
+    long httpCode = 0;
+    curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &httpCode);
+    if (httpCode != 201) {
+      log_->error("Block upload for {} failed with HTTP code: {}", blockId, httpCode);
+      return false;
+    }
+    return true;
+  } catch (const std::exception& ex) {
+    log_->error("Exception during block upload: {}", ex.what());
+    return false;
+  }
+}
+
+bool AzureUploader::commitBlockList() {
+  std::ostringstream xmlBody;
+  xmlBody << "<?xml version=\"1.0\" encoding=\"utf-8\"?><BlockList>";
+  for (const auto& blockId : blockIds_) {
+    xmlBody << "<Latest>" << blockId << "</Latest>";
+  }
+  xmlBody << "</BlockList>";
+  std::string xmlBodyStr = xmlBody.str();
+
+  std::string finalizeUrl = uploadUrl_ + "?comp=blocklist";
+  std::string contentLength = std::to_string(xmlBodyStr.length());
+  std::string authorizationHeader = generateAuthorizationHeader("PUT", finalizeUrl, contentLength);
+
+  MemoryBuffer buffer = { xmlBodyStr.c_str(), xmlBodyStr.length() };
+
+  curl_easy_reset(curl_);
+  curl_easy_setopt(curl_, CURLOPT_URL, finalizeUrl.c_str());
+  curl_easy_setopt(curl_, CURLOPT_UPLOAD, 1L);
+  curl_easy_setopt(curl_, CURLOPT_READFUNCTION, readCallback);
+  curl_easy_setopt(curl_, CURLOPT_READDATA, &buffer);
+  curl_easy_setopt(curl_, CURLOPT_INFILESIZE_LARGE, static_cast<curl_off_t>(xmlBodyStr.length()));
+  curl_easy_setopt(curl_, CURLOPT_VERBOSE, 0L);
+
+  struct curl_slist* localHeaders = nullptr;
+  localHeaders = curl_slist_append(localHeaders, "Content-Type: application/octet-stream");
+  localHeaders = curl_slist_append(localHeaders, ("Authorization: " + authorizationHeader).c_str());
+  localHeaders = curl_slist_append(localHeaders, ("x-ms-date: " + xMsDate_).c_str());
+  localHeaders = curl_slist_append(localHeaders, "x-ms-version: 2020-02-10");
+  curl_easy_setopt(curl_, CURLOPT_HTTPHEADER, localHeaders);
+
+  CURLcode res = curl_easy_perform(curl_);
+  curl_slist_free_all(localHeaders);
+
+  if (res != CURLE_OK) {
+    log_->error("Failed to commit block list: {}", curl_easy_strerror(res));
+    return false;
+  }
+
+  long httpCode = 0;
+  curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &httpCode);
+  if (httpCode != 201) {
+    log_->error("Finalize (commit block list) failed with HTTP code: {}", httpCode);
+    return false;
+  }
+
+  return true;
+}
+
+std::string AzureUploader::generateBlockId(int blockNumber) {
+    std::ostringstream oss;
+    oss << "block-" << std::setw(6) << std::setfill('0') << blockNumber;
+    return encodeBase64(oss.str());
 }
 
 std::string AzureUploader::generateAuthorizationHeader(const std::string& httpMethod, const std::string& url, const std::string& contentLength) {
@@ -142,162 +398,6 @@ std::string AzureUploader::generateAuthorizationHeader(const std::string& httpMe
     // Return the Authorization header
     std::string authorizationHeader = "SharedKey " + accountName_ + ":" + signature;
     return authorizationHeader;
-}
-
-bool AzureUploader::upload(std::vector<char>& data, bool isFinalChunk) {
-    if (upload_failed_) return false;
-
-    if (!upload_in_progress_) {
-        if (!initiateUpload()) {
-            upload_failed_ = true;
-            return false;
-        }
-        upload_in_progress_ = true;
-        blockCount_ = 0; // Initialize block count
-    }
-
-    // Upload the current block
-    if (!uploadBlock(data.data(), data.size(), ++blockCount_)) {
-        log_->error("Failed to upload block {}", blockCount_);
-        upload_failed_ = true;
-        return false;
-    }
-
-    if (isFinalChunk) {
-        if (!finalizeUpload()) {
-            upload_failed_ = true;
-            return false;
-        }
-        upload_in_progress_ = false;
-    }
-
-    return true;
-}
-
-bool AzureUploader::initiateUpload() {
-    objectKey_ = createObjectPath(metadata_.call_sid, recordFileType_ == RecordFileType::WAV ? "wav" : "mp3");
-    uploadUrl_ += objectKey_;
-    return true;
-}
-
-bool AzureUploader::uploadBlock(const char* data, size_t size, int blockNumber) {
-    try {
-        std::string blockId = generateBlockId(blockNumber);
-        blockIds_.push_back(blockId);
-
-        std::string blockUrl = uploadUrl_ + "?comp=block&blockid=" + curl_easy_escape(curl_, blockId.c_str(), blockId.length());
-
-        std::string contentLength = std::to_string(size);
-        std::string authorizationHeader = generateAuthorizationHeader("PUT", blockUrl, contentLength);
-
-        // Reset and configure CURL
-        curl_easy_reset(curl_);
-        curl_easy_setopt(curl_, CURLOPT_URL, blockUrl.c_str());
-        curl_easy_setopt(curl_, CURLOPT_UPLOAD, 1L);
-
-        MemoryBuffer buffer = { data, size };
-
-        curl_easy_setopt(curl_, CURLOPT_READFUNCTION, readCallback);
-        curl_easy_setopt(curl_, CURLOPT_READDATA, &buffer);
-        curl_easy_setopt(curl_, CURLOPT_INFILESIZE_LARGE, static_cast<curl_off_t>(size));
-        curl_easy_setopt(curl_, CURLOPT_VERBOSE, 0L);
-
-        // Set headers
-        struct curl_slist* localHeaders = nullptr;
-        localHeaders = curl_slist_append(localHeaders, "Content-Type: application/octet-stream");
-        localHeaders = curl_slist_append(localHeaders, ("Authorization: " + authorizationHeader).c_str());
-        localHeaders = curl_slist_append(localHeaders, ("x-ms-date: " + xMsDate_).c_str());
-        localHeaders = curl_slist_append(localHeaders, "x-ms-version: 2020-02-10");
-        curl_easy_setopt(curl_, CURLOPT_HTTPHEADER, localHeaders);
-
-        // Perform the request
-        CURLcode res = curl_easy_perform(curl_);
-        curl_slist_free_all(localHeaders);
-
-        // Check for CURL errors
-        if (res != CURLE_OK) {
-            log_->error("Failed to upload block: {}", curl_easy_strerror(res));
-            return false;
-        }
-
-        // Check HTTP response code
-        long httpCode = 0;
-        curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &httpCode);
-        if (httpCode != 201) {
-            log_->error("Block upload failed with HTTP code: {}", httpCode);
-            return false;
-        }
-
-        return true;
-    } catch (const std::exception& ex) {
-        log_->error("Exception during block upload: {}", ex.what());
-        return false;
-    }
-}
-
-bool AzureUploader::finalizeUpload() {
-    // Build the XML body for block list
-    std::ostringstream xmlBody;
-    xmlBody << "<?xml version=\"1.0\" encoding=\"utf-8\"?><BlockList>";
-    for (const auto& blockId : blockIds_) {
-        xmlBody << "<Latest>" << blockId << "</Latest>";
-    }
-    xmlBody << "</BlockList>";
-
-    std::string xmlBodyStr = xmlBody.str();
-    std::string finalizeUrl = uploadUrl_ + "?comp=blocklist";
-
-    // Generate the Authorization header
-    std::string contentLength = std::to_string(xmlBodyStr.length());
-    std::string authorizationHeader = generateAuthorizationHeader("PUT", finalizeUrl, contentLength);
-
-    // Set up memory buffer for the XML body
-    MemoryBuffer buffer = { xmlBodyStr.c_str(), xmlBodyStr.length() };
-
-    // Reset curl for a clean configuration
-    curl_easy_reset(curl_);
-
-    // Set the URL and HTTP method (PUT)
-    curl_easy_setopt(curl_, CURLOPT_URL, finalizeUrl.c_str());
-    curl_easy_setopt(curl_, CURLOPT_UPLOAD, 1L);
-    curl_easy_setopt(curl_, CURLOPT_READFUNCTION, readCallback);
-    curl_easy_setopt(curl_, CURLOPT_READDATA, &buffer);
-    curl_easy_setopt(curl_, CURLOPT_INFILESIZE_LARGE, static_cast<curl_off_t>(xmlBodyStr.length()));
-    curl_easy_setopt(curl_, CURLOPT_VERBOSE, 0L);
-
-    // Set headers
-    struct curl_slist* localHeaders = nullptr;
-    localHeaders = curl_slist_append(localHeaders, "Content-Type: application/octet-stream");
-    localHeaders = curl_slist_append(localHeaders, ("Authorization: " + authorizationHeader).c_str());
-    localHeaders = curl_slist_append(localHeaders, ("x-ms-date: " + xMsDate_).c_str());
-    localHeaders = curl_slist_append(localHeaders, "x-ms-version: 2020-02-10");
-    curl_easy_setopt(curl_, CURLOPT_HTTPHEADER, localHeaders);
-
-    // Perform the request
-    CURLcode res = curl_easy_perform(curl_);
-    curl_slist_free_all(localHeaders);
-
-    if (res != CURLE_OK) {
-        log_->error("Failed to finalize upload: {}", curl_easy_strerror(res));
-        return false;
-    }
-
-    // Check HTTP response code
-    long httpCode = 0;
-    curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &httpCode);
-    if (httpCode != 201) {
-        log_->error("Finalize upload failed with HTTP code: {}", httpCode);
-        return false;
-    }
-
-    log_->info("File uploaded successfully: {}", objectKey_);
-    return true;
-}
-
-std::string AzureUploader::generateBlockId(int blockNumber) {
-    std::ostringstream oss;
-    oss << "block-" << std::setw(6) << std::setfill('0') << blockNumber;
-    return encodeBase64(oss.str());
 }
 
 std::string AzureUploader::encodeBase64(const std::string& input) {

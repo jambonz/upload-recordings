@@ -32,11 +32,11 @@ void sigint_handler(int sig) {
 
 // Parse command-line arguments
 int parse_port(int argc, const char **argv, int default_port) {
-    for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
-            return std::atoi(argv[i + 1]);
-        }
+  for (int i = 1; i < argc; ++i) {
+    if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+      return std::atoi(argv[i + 1]);
     }
+  }
     return default_port;
 }
 
@@ -60,13 +60,15 @@ int main(int argc, const char **argv) {
     spdlog::level::level_enum level = spdlog::level::info; // Default level: info
     if (env_log_level) {
         std::string level_str(env_log_level);
-        if (level_str == "debug") level = spdlog::level::debug;
+        if (level_str == "debug") {
+          std::cout << "Setting log level to debug" << std::endl;
+          level = spdlog::level::debug;
+        }
         else if (level_str == "info") level = spdlog::level::info;
         else if (level_str == "warn") level = spdlog::level::warn;
         else if (level_str == "error") level = spdlog::level::err;
     }
     spdlog::set_level(level);
-
 
 
     Aws::SDKOptions options;
@@ -87,7 +89,8 @@ int main(int argc, const char **argv) {
       }
 
       lws_set_log_level(logs, nullptr);
-      spdlog::info("jambonz recording server (ws) | Listening on http://localhost:{} (-s = use TLS / https)", port);
+      spdlog::info("jambonz recording server (ws) version {} | Listening on http://localhost:{} (-s = use TLS / https)", 
+        UPLOADER_VERSION, port);
       
       // Initialize info struct
       std::memset(&info, 0, sizeof(info));
