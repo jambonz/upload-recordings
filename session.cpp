@@ -10,7 +10,6 @@ CryptoHelper Session::cryptoHelper_ = CryptoHelper();
 std::atomic<int> Session::activeSessionCount_{0};
 
 Session::Session() : json_metadata_(nullptr), closed_(false), storage_service_(StorageService::UNKNOWN) {
-  ++activeSessionCount_;
 
   // Create a unique sink for this session
   auto sink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
@@ -21,10 +20,11 @@ Session::Session() : json_metadata_(nullptr), closed_(false), storage_service_(S
   buffer_.reserve(MAX_BUFFER_SIZE);
   initialize();
   worker_thread_ = std::thread(&Session::worker, this);
+
+  ++activeSessionCount_;
 }
 
 Session::~Session() {
-  --activeSessionCount_; 
   {
     std::lock_guard<std::mutex> lock(mutex_);
     closed_ = true; // Mark the session as closed
@@ -36,6 +36,7 @@ Session::~Session() {
   if (worker_thread_.joinable()) {
     worker_thread_.join();
   }
+  --activeSessionCount_; 
   log_->info("destroyed session, there are now {} active sessions", Session::getActiveSessionCount());
 }
 
@@ -49,7 +50,7 @@ void Session::setContext(const std::string& account_sid, const std::string& call
 
   log_->set_pattern(fmt::format("(account_sid: {}, call_sid: {}) %v", account_sid_, call_sid_));
 
-  log_->info("created session, there are now {} active sessions", Session::getActiveSessionCount());
+  log_->info("received metadata, there are now {} active sessions", Session::getActiveSessionCount());
 }
 
 void Session::addData(int isBinary, const char *data, size_t len) {
