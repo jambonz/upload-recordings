@@ -97,13 +97,13 @@ std::string signWithPrivateKey(const std::string& message, const std::string& pr
     return encodeBase64URL(std::string(signature.begin(), signature.end()));
 }
 
-GoogleUploader::GoogleUploader(std::shared_ptr<spdlog::logger> log,
+GoogleUploader::GoogleUploader(const std::shared_ptr<Session>& session, std::shared_ptr<spdlog::logger> log,
     std::string& uploadFolder,
     RecordFileType ftype,
     const std::string& bucketName,
     const std::string& clientEmail, 
     const std::string& privateKey, 
-    const std::string& tokenUri) : recordFileType_(ftype), clientEmail_(clientEmail), privateKey_(privateKey), tokenUri_(tokenUri), 
+    const std::string& tokenUri) : StorageUploader(session), recordFileType_(ftype), clientEmail_(clientEmail), privateKey_(privateKey), tokenUri_(tokenUri), 
     bucketName_(bucketName), curl_(curl_easy_init()), headers_(nullptr) {
 
     setLogger(log);
@@ -129,7 +129,6 @@ GoogleUploader::~GoogleUploader() {
     if (headers_) {
         curl_slist_free_all(headers_);
     }
-    cleanupTempFile();
 }
 
 // Static header callback function
@@ -185,6 +184,7 @@ void GoogleUploader::finalizeUpload() {
     if (wavTempFd == -1) {
       log_->error("Failed to create unique WAV temporary file using mkstemp: {}", std::strerror(errno));
       upload_failed_ = true;
+      cleanupTempFile();
       return;
     }
     std::ofstream wavTempFile(wavTempFilePath, std::ios::binary);
@@ -192,6 +192,7 @@ void GoogleUploader::finalizeUpload() {
       log_->error("Failed to open WAV temporary file: {}", wavTempFilePath);
       close(wavTempFd);
       upload_failed_ = true;
+      cleanupTempFile();
       return;
     }
     // Get the size of the raw audio data.
@@ -206,6 +207,7 @@ void GoogleUploader::finalizeUpload() {
       log_->error("Failed to write WAV header to temporary file: {}", wavTempFilePath);
       close(wavTempFd);
       upload_failed_ = true;
+      cleanupTempFile();
       return;
     }
     // Append the raw audio data.
@@ -214,6 +216,7 @@ void GoogleUploader::finalizeUpload() {
       log_->error("Failed to open raw audio temporary file: {}", tempFilePath_);
       close(wavTempFd);
       upload_failed_ = true;
+      cleanupTempFile();
       return;
     }
     wavTempFile << rawAudioFile.rdbuf();
@@ -229,6 +232,7 @@ void GoogleUploader::finalizeUpload() {
   if (sessionUrl.empty()) {
     log_->error("Failed to initiate resumable upload session.");
     upload_failed_ = true;
+    cleanupTempFile();
     return;
   }
 
@@ -245,6 +249,7 @@ void GoogleUploader::finalizeUpload() {
   if (recordFileType_ == RecordFileType::WAV) {
     std::remove(finalFilePath.c_str());
   }
+  cleanupTempFile();
 }
 
 bool GoogleUploader::uploadFileInChunks(const std::string &filePath, const std::string &sessionUrl) {

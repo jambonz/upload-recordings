@@ -14,6 +14,9 @@
 #include <spdlog/sinks/stdout_sinks.h>
 #include <memory>
 
+// Forward declaration of Session
+class Session;
+
 enum class RecordFileType {
     WAV,
     MP3,
@@ -34,8 +37,10 @@ struct Metadata_t {
 
 class StorageUploader {
 public:
+    StorageUploader(const std::shared_ptr<Session>& session) : sessionRef_(session) {
+    }
+    
     virtual ~StorageUploader() {
-        cleanupTempFile(); // Ensure cleanup when the uploader is destroyed
     }
 
     // Upload method to be implemented by derived classes
@@ -69,8 +74,12 @@ protected:
     std::string tempFilePath_;
     std::ofstream tempFile_;
 
+    // weak reference to the session so we can trigger its destruction after upload completion
+    std::weak_ptr<Session> sessionRef_;
+
     // Static atomic counter for generating unique file names
     static std::atomic<int> uniqueCounter;
+
 };
 
 #endif // STORAGE_UPLOADER_H

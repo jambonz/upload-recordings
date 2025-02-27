@@ -46,9 +46,9 @@ std::vector<unsigned char> decodeBase64(const std::string& input) {
     return decodedData;
 }
 
-AzureUploader::AzureUploader(std::shared_ptr<spdlog::logger> log, std::string& uploadFolder, RecordFileType ftype, 
+AzureUploader::AzureUploader(const std::shared_ptr<Session>& session, std::shared_ptr<spdlog::logger> log, std::string& uploadFolder, RecordFileType ftype, 
   const std::string& connectionString, const std::string& containerName)
-  : recordFileType_(ftype),
+  : StorageUploader(session), recordFileType_(ftype),
       containerName_(containerName),
       curl_(curl_easy_init()),
       headers_(nullptr),
@@ -90,7 +90,6 @@ AzureUploader::~AzureUploader() {
     if (curl_) {
       curl_easy_cleanup(curl_);
     }
-    cleanupTempFile();
 }
 
 bool AzureUploader::upload(std::vector<char>& data, bool isFinalChunk) {
@@ -99,6 +98,7 @@ bool AzureUploader::upload(std::vector<char>& data, bool isFinalChunk) {
   if (!tempFile_.is_open()) {
       log_->error("Temporary file is not open. Upload failed.");
       upload_failed_ = true;
+      cleanupTempFile();
       return false;
   }
 
@@ -107,6 +107,7 @@ bool AzureUploader::upload(std::vector<char>& data, bool isFinalChunk) {
   if (!tempFile_.good()) {
       log_->error("Error writing to temporary file: {}", tempFilePath_);
       upload_failed_ = true;
+      cleanupTempFile();
       return false;
   }
   tempFile_.flush();
@@ -126,6 +127,7 @@ bool AzureUploader::upload(std::vector<char>& data, bool isFinalChunk) {
       if (wavTempFd == -1) {
         log_->error("Failed to create unique WAV temporary file: {}", std::strerror(errno));
         upload_failed_ = true;
+        cleanupTempFile();
         return false;
       }
       std::ofstream wavTempFile(wavTempFilePath, std::ios::binary);
@@ -133,6 +135,7 @@ bool AzureUploader::upload(std::vector<char>& data, bool isFinalChunk) {
         log_->error("Failed to open WAV temporary file: {}", wavTempFilePath);
         close(wavTempFd);
         upload_failed_ = true;
+        cleanupTempFile();
         return false;
       }
       // Determine the size of the raw audio.
@@ -146,6 +149,7 @@ bool AzureUploader::upload(std::vector<char>& data, bool isFinalChunk) {
         log_->error("Failed to write WAV header to temporary file: {}", wavTempFilePath);
         close(wavTempFd);
         upload_failed_ = true;
+        cleanupTempFile();
         return false;
       }
       std::ifstream rawAudioFile(tempFilePath_, std::ios::binary);
@@ -153,6 +157,7 @@ bool AzureUploader::upload(std::vector<char>& data, bool isFinalChunk) {
         log_->error("Failed to open raw audio temporary file: {}", tempFilePath_);
         close(wavTempFd);
         upload_failed_ = true;
+        cleanupTempFile();
         return false;
       }
       wavTempFile << rawAudioFile.rdbuf();
@@ -173,12 +178,14 @@ bool AzureUploader::upload(std::vector<char>& data, bool isFinalChunk) {
     if (!uploadFileInBlocks(finalFilePath)) {
       log_->error("Failed to upload file in blocks: {}", finalFilePath);
       upload_failed_ = true;
+      cleanupTempFile();
       return false;
     }
     // Commit the block list.
     if (!commitBlockList()) {
       log_->error("Failed to commit block list for blob: {}", objectKey_);
       upload_failed_ = true;
+      cleanupTempFile();
       return false;
     }
 

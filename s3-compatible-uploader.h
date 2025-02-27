@@ -10,9 +10,14 @@
 
 class S3CompatibleUploader : public StorageUploader {
 public:
-    S3CompatibleUploader(std::shared_ptr<spdlog::logger> log_, std::string& uploadFolder, RecordFileType ftype,
-                         const Aws::Auth::AWSCredentials& credentials, const Aws::String& region,
-                         const Aws::String& bucketName, const Aws::String& customEndpoint = "");
+    S3CompatibleUploader(const std::shared_ptr<Session>& session, 
+      std::shared_ptr<spdlog::logger> log_,
+      std::string& uploadFolder,
+      RecordFileType ftype,
+      const Aws::Auth::AWSCredentials& credentials,
+      const Aws::String& region,
+      const Aws::String& bucketName,
+      const Aws::String& customEndpoint = "");
     ~S3CompatibleUploader();
 
     bool upload(std::vector<char>& data, bool isFinalChunk = false) override;

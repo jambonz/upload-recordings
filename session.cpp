@@ -2,97 +2,235 @@
 #include "s3-compatible-uploader.h"
 #include "azure-uploader.h"
 #include "google-uploader.h"
+#include "connection-manager.h"
+#include "string-utils.h"
 
 // Static member initialization
 std::once_flag Session::initFlag_;
 std::string Session::uploadFolder_;
 CryptoHelper Session::cryptoHelper_ = CryptoHelper();
-std::atomic<int> Session::activeSessionCount_{0};
 
-Session::Session() : json_metadata_(nullptr), closed_(false), storage_service_(StorageService::UNKNOWN) {
+Session::Session() 
+    : json_metadata_(nullptr), 
+      storage_service_(StorageService::UNKNOWN),
+      strand_(ThreadPool::getInstance().createStrand()) {
 
-  // Create a unique sink for this session
-  auto sink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
-  
-  // Create a logger with its own sink
-  log_ = std::make_shared<spdlog::logger>("session_logger", sink);
+    // Create a unique sink for this session
+    auto sink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
+    
+    // Create a logger with its own sink
+    log_ = std::make_shared<spdlog::logger>("session_logger", sink);
 
-  buffer_.reserve(MAX_BUFFER_SIZE);
-  initialize();
-  worker_thread_ = std::thread(&Session::worker, this);
-
-  ++activeSessionCount_;
+    buffer_.reserve(MAX_BUFFER_SIZE);
+    initialize();
 }
 
-Session::~Session() {
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    closed_ = true; // Mark the session as closed
-  }
+
+Session::~Session() {  
   if (json_metadata_) {
-    cJSON_AS4CPP_Delete(json_metadata_);
+      cJSON_AS4CPP_Delete(json_metadata_);
   }
-  cv_.notify_one(); // Wake up the worker thread
-  if (worker_thread_.joinable()) {
-    worker_thread_.join();
-  }
-  --activeSessionCount_; 
-  log_->info("destroyed session, there are now {} active sessions", Session::getActiveSessionCount());
-}
-
-int Session::getActiveSessionCount() {
-    return activeSessionCount_.load(); // Get the current value atomically
 }
 
 void Session::setContext(const std::string& account_sid, const std::string& call_sid) {
-  account_sid_ = account_sid;
-  call_sid_ = call_sid;
+    account_sid_ = account_sid;
+    call_sid_ = call_sid;
 
-  log_->set_pattern(fmt::format("(account_sid: {}, call_sid: {}) %v", account_sid_, call_sid_));
-
-  log_->info("received metadata, there are now {} active sessions", Session::getActiveSessionCount());
+    log_->set_pattern(fmt::format("(account_sid: {}, call_sid: {}) %v", account_sid_, call_sid_));
+    log_->info("Received metadata");
 }
 
 void Session::addData(int isBinary, const char *data, size_t len) {
-  {
-    std::unique_lock<std::mutex> lock(mutex_);
+    bool should_process = false;
+    
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
 
-    // Check for overflow
-    if (buffer_.size() + len > MAX_BUFFER_SIZE) {
-      std::cerr << "Buffer overflow: dropping data, buffer_ size is " << std::dec << buffer_.size() << std::endl;
-      return;
+        // Check for overflow
+        if (buffer_.size() + len > MAX_BUFFER_SIZE) {
+            log_->error("Buffer overflow: dropping data, buffer size is {}", buffer_.size());
+            return;
+        }
+
+        if (isBinary) {
+            buffer_.insert(buffer_.end(), data, data + len);
+
+            // Process the buffer if it reaches the threshold
+            if (buffer_.size() >= BUFFER_PROCESS_SIZE) {
+                should_process = true;
+            }
+        } 
+        else if (!json_metadata_) {
+            tmp_.append(data, len);
+            cJSON *json = cJSON_AS4CPP_Parse(tmp_.c_str());
+            if (json != nullptr) {
+                json_metadata_ = json;
+                metadata_received_ = true;
+                postProcessMetadataTask();
+            }
+        }
+        else {
+            log_->info("Unexpected text frame after metadata: {}", std::string(data, len));
+        }
     }
-
-    if (isBinary) {
-      buffer_.insert(buffer_.end(), data, data + len);
-
-      // Notify the worker thread if the buffer size reaches the threshold
-      if (buffer_.size() >= BUFFER_PROCESS_SIZE) {
-        cv_.notify_one();
-      }
-    } 
-    else if (!json_metadata_) {
-      tmp_.append(data, len);
-      cJSON *json = cJSON_AS4CPP_Parse(tmp_.c_str());
-      if (json != nullptr) {
-        json_metadata_ = json;
-        metadata_received_ = true;
-
-        cv_.notify_one(); // Notify the worker thread to process metadata
-      }
+    
+    if (should_process) {
+        postProcessBufferTask(false);
     }
-    else {
-      log_->debug("Unexpected text frame after metadata: {}", std::string(data, len));
-    }
-  }
 }
 
 void Session::notifyClose() {
+    log_->info("connection closed");
+    postProcessBufferTask(true);
+}
+
+void Session::postProcessMetadataTask() {
+    auto self = shared_from_this();
+
+    std::string threadId = getThreadIdString();
+    log_->info("read metadata in threadId: {}", threadId);
+    
+    // Post to strand to ensure sequential processing
+    boost::asio::post(strand_, [self]() {
+        self->processMetadata();
+    });
+}
+
+void Session::postProcessBufferTask(bool isFinal) {
+    auto self = shared_from_this();
+    
+    // Post to strand to ensure sequential processing
+    boost::asio::post(strand_, [self, isFinal]() {
+        self->processBuffer(isFinal);
+    });
+}
+
+void Session::processMetadata() {
+    std::string threadId = getThreadIdString();
+    log_->info("processing metadata in threadId: {}", threadId);  
+    parseMetadata(json_metadata_);
+        
+    try {
+        recordCredentials_ = std::make_unique<RecordCredentials>(
+            MySQLHelper::getInstance().fetchRecordCredentials(account_sid_)
+        );
+
+        log_->info("Record Format: {}", recordCredentials_->recordFormat);
+
+        // Decrypt the bucket credential
+        std::string decryptedBucketCredential = cryptoHelper_.decrypt(recordCredentials_->bucketCredential);
+
+        cJSON* bucketCredentialJson = cJSON_AS4CPP_Parse(decryptedBucketCredential.c_str());
+        if (bucketCredentialJson) {
+            cJSON* vendor = cJSON_AS4CPP_GetObjectItem(bucketCredentialJson, "vendor");
+            if (vendor && cJSON_AS4CPP_IsString(vendor)) {
+                if (std::string(vendor->valuestring) == "aws_s3") {
+                    storage_service_ = StorageService::AWS_S3;
+                    log_->info("Using AWS S3 storage service.");
+                    parseAwsCredentials(decryptedBucketCredential);
+                }
+                else if(std::string(vendor->valuestring) == "s3_compatible") {
+                    storage_service_ = StorageService::S3_COMPATIBLE;
+                    log_->info("Using S3 compatible storage service.");
+                    parseAwsCredentials(decryptedBucketCredential);
+                }
+                else if(std::string(vendor->valuestring) == "azure") {
+                    storage_service_ = StorageService::AZURE_CLOUD_STORAGE;
+                    log_->info("Using Azure storage service.");
+                    parseAzureCredentials(decryptedBucketCredential);
+                }
+                else if(std::string(vendor->valuestring) == "google") {
+                    storage_service_ = StorageService::GOOGLE_CLOUD_STORAGE;
+                    log_->info("Using Google storage service.");
+                    parseGoogleCredentials(decryptedBucketCredential);
+                }
+                else {
+                    log_->warn("Unsupported storage service: {}", vendor->valuestring);
+                }
+            }
+            cJSON_AS4CPP_Delete(bucketCredentialJson);
+
+            if (recordCredentials_->recordFormat == "mp3") {
+                recordFileType_ = RecordFileType::MP3;
+                mp3Encoder_ = std::make_unique<Mp3Encoder>(metadata_.sample_rate, 2, 128); // 128 kbps
+                log_->info("MP3 encoder created.");
+            }
+            else {
+                recordFileType_ = RecordFileType::WAV;
+            }
+        }
+
+        // initialization of the storage uploader
+        if (!storageUploader_) {
+          if ((storageUploader_ = createStorageUploader(recordFileType_))) {
+              storageUploader_->setMetadata(metadata_);
+          }
+        }
+    } catch (const std::exception &e) {
+        log_->error("Failed to fetch or decrypt record credentials: {}", e.what());
+    }
+}
+
+void Session::processBuffer(bool isFinal) {
+  std::vector<char> localBuffer;
+  bool process_buffer = false;
+  
   {
-    std::lock_guard<std::mutex> lock(mutex_);
-    closed_ = true;
+      std::unique_lock<std::mutex> lock(mutex_);
+      
+      if (!buffer_.empty()) {
+          std::swap(localBuffer, buffer_);
+          
+          // Handle misalignment in the swapped buffer
+          size_t numSamples = localBuffer.size() / sizeof(short); // Total samples in localBuffer
+          size_t remainder = numSamples % 2;    // Do we have the same num samples for both channels?
+
+          if (remainder != 0) {
+              log_->info("Misaligned buffer: {} samples", numSamples);
+              // Calculate the size of the trailing odd sample (in bytes)
+              size_t leftoverSize = remainder * sizeof(short);
+
+              // Move the trailing sample(s) back to the now-empty buffer_
+              buffer_.insert(buffer_.end(), localBuffer.end() - leftoverSize, localBuffer.end());
+
+              // Remove the trailing sample(s) from localBuffer
+              localBuffer.resize(localBuffer.size() - leftoverSize);
+          }
+          
+          process_buffer = true;
+      }
   }
-  cv_.notify_one();
+  
+  // Process the buffer if we have data
+  if (process_buffer) {
+      log_->info("Processing buffer of size: {}", localBuffer.size());
+      
+      if (mp3Encoder_) {
+          mp3Encoder_->encodeInPlace(localBuffer);
+      }
+      
+      if (storageUploader_) {
+          if (!storageUploader_->upload(localBuffer, isFinal)) {
+              log_->error("Upload failed.");
+              //TODO: handle error somehow? End session??
+          }
+      }
+  }
+  else if (isFinal) {
+    if (storageUploader_) {
+      std::string threadId = getThreadIdString();
+      log_->info("uploading recording in threadId: {}", threadId);  
+  
+      storageUploader_->upload(localBuffer, isFinal);
+    }
+    else {
+      // Here we have the case where we did not get metadata so we have no uploader
+      // We need to orchestrate the destruction of this Session at this point
+      log_->warn("Session::processBuffer connection closed but no StorageUploader.");
+      auto self = shared_from_this();
+      ConnectionManager::getInstance().destroySession(self.get());
+    }
+  }
 }
 
 void Session::parseAwsCredentials(const std::string& credentials) {
@@ -193,7 +331,7 @@ void Session::parseGoogleCredentials(const std::string& credentials) {
         }
     }
 
-    log_->debug("parseGoogleCredentials: bucket_name = {}", bucket_name_);
+    log_->info("parseGoogleCredentials: bucket_name = {}", bucket_name_);
 
     cJSON_AS4CPP_Delete(json); // Clean up the main JSON object
 }
@@ -257,6 +395,7 @@ std::unique_ptr<StorageUploader> Session::createStorageUploader(RecordFileType f
     switch (storage_service_) {
       case StorageService::AWS_S3:
         return std::make_unique<S3CompatibleUploader>(
+          shared_from_this(),
           log_,
           uploadFolder_,
           ftype,
@@ -267,6 +406,7 @@ std::unique_ptr<StorageUploader> Session::createStorageUploader(RecordFileType f
 
       case StorageService::S3_COMPATIBLE:
         return std::make_unique<S3CompatibleUploader>(
+          shared_from_this(),
           log_,
           uploadFolder_,
           ftype,
@@ -277,6 +417,7 @@ std::unique_ptr<StorageUploader> Session::createStorageUploader(RecordFileType f
         );
       case StorageService::AZURE_CLOUD_STORAGE:
         return std::make_unique<AzureUploader>(
+          shared_from_this(),
           log_,
           uploadFolder_,
           ftype,
@@ -285,6 +426,7 @@ std::unique_ptr<StorageUploader> Session::createStorageUploader(RecordFileType f
         );
       case StorageService::GOOGLE_CLOUD_STORAGE:
         return std::make_unique<GoogleUploader>(
+          shared_from_this(),
           log_,
           uploadFolder_,
           ftype,
