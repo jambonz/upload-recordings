@@ -5,6 +5,9 @@ AC_PREREQ([2.69])
 # Initialize Automake
 AM_INIT_AUTOMAKE([foreign])
 
+# Add macro directory
+AC_CONFIG_MACRO_DIRS([m4])
+
 # Check for the C compiler
 AC_PROG_CC
 
@@ -26,6 +29,14 @@ PKG_CHECK_MODULES([LIBWEBSOCKETS], [libwebsockets >= 4.0],
 PKG_CHECK_MODULES([LIBCURL], [libcurl >= 7.0],
   [],
   [AC_MSG_ERROR([libcurl >= 7.0 is required but was not found.])])
+
+# Check for Boost
+AX_BOOST_BASE([1.66], [], [AC_MSG_ERROR([Boost is required but was not found.])])
+AX_BOOST_SYSTEM
+AX_BOOST_THREAD
+
+# We don't need a separate check for Boost.Asio as it's header-only
+# and is included in the standard Boost distribution that we've already checked for
 
 # optional linking with tcmalloc
 AC_ARG_ENABLE([tcmalloc],

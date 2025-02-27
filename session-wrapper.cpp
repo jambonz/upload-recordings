@@ -1,12 +1,12 @@
 #include "session-wrapper.h" // Include the header file for C-compatible declarations
-#include "session.h"        // Include the C++ Session class definition
+#include "connection-manager.h"  // Include the connection manager
 
 extern "C" {
 
-// Create a new Session instance
+// Create a new Session instance via the connection manager
 void *create_session() {
   try {
-    return new Session();
+    return ConnectionManager::getInstance().createSession();
   } catch (const std::exception &e) {
     std::cerr << "Session creation failed: " << e.what() << std::endl;
     return nullptr;
@@ -16,15 +16,9 @@ void *create_session() {
   }
 }
 
-// Destroy an existing Session instance
-void destroy_session(void *session) {
-  if (session) {
-    delete static_cast<Session *>(session);
-  }
-}
-
 // Add data to the Session buffer
 void add_data_to_session(void *session, int isBinary, const char *data, size_t len) {
+  auto p = static_cast<Session*>(session)->shared_from_this();
   if (session) {
     static_cast<Session *>(session)->addData(isBinary, data, len);
   }
@@ -32,6 +26,7 @@ void add_data_to_session(void *session, int isBinary, const char *data, size_t l
 
 // Notify the Session that the connection is closed
 void notify_session_close(void *session) {
+  auto p = static_cast<Session*>(session)->shared_from_this();
   if (session) {
     static_cast<Session *>(session)->notifyClose();
   }

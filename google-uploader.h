@@ -8,7 +8,7 @@
 
 class GoogleUploader : public StorageUploader {
 public:
-    GoogleUploader(std::shared_ptr<spdlog::logger> log, std::string& uploadFolder, 
+    GoogleUploader(const std::shared_ptr<Session>& session, std::shared_ptr<spdlog::logger> log, std::string& uploadFolder, 
       RecordFileType ftype, const std::string& bucketName, const std::string& clientEmail, 
       const std::string& privateKey, const std::string& tokenUri);
     ~GoogleUploader();

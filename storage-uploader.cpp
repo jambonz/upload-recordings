@@ -1,4 +1,5 @@
 #include "storage-uploader.h"
+#include "connection-manager.h"
 #include <iostream>
 #include <stdexcept>
 #include <cstdio>
@@ -32,14 +33,25 @@ void StorageUploader::createTempFile(const std::string& uploadFolder) {
 }
 
 void StorageUploader::cleanupTempFile() {
-    // Close and delete the temporary file if it exists
     if (tempFile_.is_open()) {
         tempFile_.close();
     }
     if (!tempFilePath_.empty()) {
-        std::remove(tempFilePath_.c_str());
-        log_->info("Temporary file cleaned up: {}", tempFilePath_);
-        tempFilePath_.clear();
+      if (std::remove(tempFilePath_.c_str()) == 0) {
+        log_->info("Temporary file successfully deleted: {}", tempFilePath_);
+      } else {
+        log_->warn("Failed to delete temporary file: {} (error: {})", tempFilePath_, strerror(errno));
+      }
+      tempFilePath_.clear();
+    }
+
+    // now the session can be destroyed
+    if (auto session = sessionRef_.lock()) {
+      log_->info("StorageUploader::cleanupTempFile - destroying session");
+      ConnectionManager::getInstance().destroySession(session.get());
+    }
+    else {
+      log_->warn("StorageUploader::cleanupTempFile - sessionRef is no longer valid");
     }
 }
 

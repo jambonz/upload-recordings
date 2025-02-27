@@ -13,7 +13,10 @@ upload_recordings_SOURCES = main.cpp \
   upload-utils.cpp \
   mysql-helper.cpp 
 
+# Note: No need for thread-pool.cpp and connection-manager.cpp which are header-only
+
 upload_recordings_CPPFLAGS = $(LIBWEBSOCKETS_CFLAGS) \
+  $(BOOST_CPPFLAGS) \
   -I/usr/include/lame \
   -I/usr/include/cppconn \
   -I/usr/include/aws-sdk-cpp \
@@ -22,6 +25,9 @@ upload_recordings_CPPFLAGS = $(LIBWEBSOCKETS_CFLAGS) \
   -DUPLOADER_VERSION=\"$(MYVERSION)\"
 
 upload_recordings_LDADD = $(LIBWEBSOCKETS_LIBS) \
+  $(BOOST_LDFLAGS) \
+  $(BOOST_SYSTEM_LIB) \
+  $(BOOST_THREAD_LIB) \
   -lmp3lame \
   -lmysqlcppconn \
   -laws-cpp-sdk-s3-crt \
@@ -33,6 +39,10 @@ upload_recordings_LDADD = $(LIBWEBSOCKETS_LIBS) \
   -lssl \
   -lcrypto \
   -lpthread
+
+if TCMALLOC
+upload_recordings_LDADD += -ltcmalloc
+endif
 
 AM_CXXFLAGS = -std=c++17
 AM_LDFLAGS = -L/usr/lib -L/usr/local/lib

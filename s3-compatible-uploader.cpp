@@ -1,14 +1,20 @@
-#include "s3-compatible-uploader.h"
-#include "wav-header.h"
 #include <iostream>
 #include <stdexcept>
 #include <fstream>
 #include <cstdio>
+#include "s3-compatible-uploader.h"
+#include "wav-header.h"
+#include "string-utils.h"
 
-S3CompatibleUploader::S3CompatibleUploader(std::shared_ptr<spdlog::logger> log, std::string& uploadFolder, RecordFileType ftype,
-                                           const Aws::Auth::AWSCredentials& credentials, const Aws::String& region,
-                                           const Aws::String& bucketName, const Aws::String& customEndpoint)
-    : bucketName_(bucketName), region_(region), recordFileType_(ftype) {
+S3CompatibleUploader::S3CompatibleUploader(const std::shared_ptr<Session>& session, 
+    std::shared_ptr<spdlog::logger> log,
+    std::string& uploadFolder,
+    RecordFileType ftype,
+    const Aws::Auth::AWSCredentials& credentials,
+    const Aws::String& region,
+    const Aws::String& bucketName,
+    const Aws::String& customEndpoint)
+    : StorageUploader(session), bucketName_(bucketName), region_(region), recordFileType_(ftype) {
     Aws::S3Crt::ClientConfiguration config;
     config.region = region;
 
@@ -32,7 +38,6 @@ S3CompatibleUploader::S3CompatibleUploader(std::shared_ptr<spdlog::logger> log, 
 }
 
 S3CompatibleUploader::~S3CompatibleUploader() {
-    cleanupTempFile(); // Use the no-argument cleanupTempFile
 }
 
 bool S3CompatibleUploader::upload(std::vector<char>& data, bool isFinalChunk) {
@@ -66,6 +71,10 @@ bool S3CompatibleUploader::upload(std::vector<char>& data, bool isFinalChunk) {
 }
 
 void S3CompatibleUploader::finalizeUpload() {
+
+    std::string threadId = getThreadIdString();
+    log_->info("S3CompatibleUploader::finalizeUpload thread id: {}", threadId);
+
     objectKey_ = createObjectPath(metadata_.call_sid, recordFileType_ == RecordFileType::WAV ? "wav" : "mp3");
 
     // Create a PutObjectRequest
@@ -101,6 +110,7 @@ void S3CompatibleUploader::finalizeUpload() {
         if (wavTempFd == -1) {
             log_->error("Failed to create unique WAV temporary file using mkstemp: {}", strerror(errno));
             upload_failed_ = true;
+            cleanupTempFile();
             return;
         }
 
@@ -110,6 +120,7 @@ void S3CompatibleUploader::finalizeUpload() {
             log_->error("Failed to open WAV temporary file: {}", wavTempFilePath);
             close(wavTempFd); // Close the file descriptor
             upload_failed_ = true;
+            cleanupTempFile();
             return;
         }
 
@@ -126,6 +137,7 @@ void S3CompatibleUploader::finalizeUpload() {
             log_->error("Failed to write WAV header to temporary file: {}", wavTempFilePath);
             close(wavTempFd); // Close the file descriptor
             upload_failed_ = true;
+            cleanupTempFile();
             return;
         }
 
@@ -170,6 +182,7 @@ void S3CompatibleUploader::finalizeUpload() {
 
       log_->error("Failed to open temporary file for upload: {}. Error: {}", tempFilePath_, errorMessage);
       upload_failed_ = true;
+      cleanupTempFile();
       return;
     }
   
@@ -186,4 +199,5 @@ void S3CompatibleUploader::finalizeUpload() {
     if (recordFileType_ == RecordFileType::WAV) {
         std::remove(finalFilePath.c_str());
     }
+    cleanupTempFile();
 }
