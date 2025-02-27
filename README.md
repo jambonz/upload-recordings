@@ -10,7 +10,7 @@ Install libraries for mp3 decoding, mysql database access, and crypto stuff.
 
 ```bash
 sudo apt-get update
-sudo apt install libcjson-dev libmp3lame-dev libmysqlcppconn-dev libspdlog-dev libfmt-dev libssl-dev libgoogle-perftools-dev
+sudo apt install libcjson-dev libmp3lame-dev libmysqlcppconn-dev libspdlog-dev libfmt-dev libssl-dev libgoogle-perftools-dev libboost-all-dev
 ```
 
 Install and build libwebsockets.
