@@ -42,7 +42,7 @@ void MySQLHelper::initializePool() {
         if (conn->isValid()) { 
             std::thread([conn]() {
                 while (true) {
-                    std::this_thread::sleep_for(std::chrono::minutes(1)); // Ping every 5 minutes
+                    std::this_thread::sleep_for(std::chrono::minutes(1)); // Ping every 1 minutes
                     try {
                         if (!conn->isValid()) {
                             std::cerr << "MySQL connection is invalid, reconnecting...\n";
