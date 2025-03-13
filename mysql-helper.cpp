@@ -1,6 +1,8 @@
 #include "mysql-helper.h"
 #include <stdexcept>
 #include <iostream>
+#include <thread>
+#include <chrono>
 
 MySQLHelper::MySQLHelper(size_t poolSize) : poolSize_(poolSize) {
     const char* hostEnv = std::getenv("MYSQL_HOST");
@@ -36,6 +38,24 @@ void MySQLHelper::initializePool() {
             [](sql::Connection* connection) { delete connection; }
         );
         conn->setSchema(database_);
+        // Ensure connection stays alive by setting a ping mechanism
+        if (conn->isValid()) { 
+            std::thread([conn]() {
+                while (true) {
+                    std::this_thread::sleep_for(std::chrono::minutes(5)); // Ping every 5 minutes
+                    try {
+                        if (!conn->isValid()) {
+                            std::cerr << "MySQL connection is invalid, reconnecting...\n";
+                            conn->reconnect();
+                        } else {
+                            conn->prepareStatement("SELECT 1")->execute(); // Keep connection alive
+                        }
+                    } catch (const sql::SQLException &e) {
+                        std::cerr << "MySQL ping failed: " << e.what() << std::endl;
+                    }
+                }
+            }).detach();
+        }
         connectionPool_.push(conn);
     }
 }
