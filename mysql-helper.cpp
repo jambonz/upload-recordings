@@ -38,26 +38,36 @@ void MySQLHelper::initializePool() {
             [](sql::Connection* connection) { delete connection; }
         );
         conn->setSchema(database_);
-        // Ensure connection stays alive by setting a ping mechanism
-        if (conn->isValid()) { 
-            std::thread([conn]() {
-                while (true) {
-                    std::this_thread::sleep_for(std::chrono::minutes(1)); // Ping every 1 minutes
-                    try {
-                        if (!conn->isValid()) {
-                            std::cerr << "MySQL connection is invalid, reconnecting...\n";
-                            conn->reconnect();
-                        } else {
-                            conn->prepareStatement("SELECT 1")->execute(); // Keep connection alive
-                        }
-                    } catch (const sql::SQLException &e) {
-                        std::cerr << "MySQL ping failed: " << e.what() << std::endl;
-                    }
-                }
-            }).detach();
-        }
         connectionPool_.push(conn);
     }
+
+    // Start a thread to keep connections alive
+    std::thread([this]() {
+        while (true) {
+            // Run every 5 minutes
+            std::this_thread::sleep_for(std::chrono::minutes(5));
+            for (size_t i = 0; i < poolSize_; ++i) {
+                auto connection = getConnection();
+                try {
+                    auto stmt = std::unique_ptr<sql::PreparedStatement>(connection->prepareStatement("SELECT 1"));
+                    auto res = std::unique_ptr<sql::ResultSet>(stmt->executeQuery());
+                    // comsume the result
+                    res->next();
+                } catch (const sql::SQLException& e) {
+                    std::cerr << "MySQL error during keep-alive: " << e.what() << std::endl;
+                    // Attempt to reconnect
+                    try {
+                        connection.reset(driver_->connect(host_, user_, password_));
+                        connection->setSchema(database_);
+                        std::cerr << "Reconnected to MySQL server." << std::endl;
+                    } catch (const sql::SQLException& reconnectException) {
+                        std::cerr << "MySQL reconnection failed: " << reconnectException.what() << std::endl;
+                    }
+                }
+                releaseConnection(connection);
+            }
+        }
+    }).detach();
 }
 
 std::shared_ptr<sql::Connection> MySQLHelper::getConnection() {
