@@ -1,6 +1,8 @@
 #include "mysql-helper.h"
 #include <stdexcept>
 #include <iostream>
+#include <thread>
+#include <chrono>
 
 MySQLHelper::MySQLHelper(size_t poolSize) : poolSize_(poolSize) {
     const char* hostEnv = std::getenv("MYSQL_HOST");
@@ -38,6 +40,34 @@ void MySQLHelper::initializePool() {
         conn->setSchema(database_);
         connectionPool_.push(conn);
     }
+
+    // Start a thread to keep connections alive
+    std::thread([this]() {
+        while (true) {
+            // Run every 5 minutes
+            std::this_thread::sleep_for(std::chrono::minutes(5));
+            for (size_t i = 0; i < poolSize_; ++i) {
+                auto connection = getConnection();
+                try {
+                    auto stmt = std::unique_ptr<sql::PreparedStatement>(connection->prepareStatement("SELECT 1"));
+                    auto res = std::unique_ptr<sql::ResultSet>(stmt->executeQuery());
+                    // comsume the result
+                    res->next();
+                } catch (const sql::SQLException& e) {
+                    std::cerr << "MySQL error during keep-alive: " << e.what() << std::endl;
+                    // Attempt to reconnect
+                    try {
+                        connection.reset(driver_->connect(host_, user_, password_));
+                        connection->setSchema(database_);
+                        std::cerr << "Reconnected to MySQL server." << std::endl;
+                    } catch (const sql::SQLException& reconnectException) {
+                        std::cerr << "MySQL reconnection failed: " << reconnectException.what() << std::endl;
+                    }
+                }
+                releaseConnection(connection);
+            }
+        }
+    }).detach();
 }
 
 std::shared_ptr<sql::Connection> MySQLHelper::getConnection() {
