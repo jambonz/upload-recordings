@@ -33,9 +33,78 @@ struct per_session_data__minimal {
         0, NULL, 0 \
     }
 
-/* Protocols array */
+/* HTTP callback for health check */
+static int callback_http(struct lws *wsi, enum lws_callback_reasons reason,
+                         void *user, void *in, size_t len)
+{
+    switch (reason) {
+    case LWS_CALLBACK_HTTP: {
+
+        /* Check if this is a request for /health */
+        if (in && len >= 7 && !strncmp((const char *)in, "/health", 7)) {
+
+            /* Schedule a callback for writable */
+            lws_callback_on_writable(wsi);
+            return 0;
+        }
+
+        /* For all other HTTP requests, use the default dummy handler */
+        return lws_callback_http_dummy(wsi, reason, user, in, len);
+    }
+
+    case LWS_CALLBACK_HTTP_WRITEABLE: {
+
+        unsigned char buffer[LWS_PRE + 512];
+        unsigned char *p = &buffer[LWS_PRE];
+        unsigned char *end = &buffer[sizeof(buffer) - LWS_PRE - 1];
+        int n;
+
+        /* Build headers explicitly */
+        if (lws_add_http_header_status(wsi, HTTP_STATUS_OK, &p, end)) {
+            return 1;
+        }
+
+        if (lws_add_http_header_by_token(wsi, WSI_TOKEN_HTTP_CONTENT_TYPE,
+                                      (unsigned char *)"text/plain", 10, &p, end)) {
+            return 1;
+        }
+
+        if (lws_add_http_header_content_length(wsi, 2, &p, end)) {
+            return 1;
+        }
+
+        if (lws_finalize_http_header(wsi, &p, end)) {
+            return 1;
+        }
+
+        /* Write the headers */
+        n = lws_write(wsi, buffer + LWS_PRE, p - (buffer + LWS_PRE), LWS_WRITE_HTTP_HEADERS);
+        if (n < 0) {
+            return 1;
+        }
+
+        /* Write the body */
+        memcpy(buffer + LWS_PRE, "OK", 2);
+        n = lws_write(wsi, buffer + LWS_PRE, 2, LWS_WRITE_HTTP);
+        if (n < 0) {
+            return 1;
+        }
+
+        /* Complete the transaction */
+        n = lws_http_transaction_completed(wsi);
+        return n;
+    }
+
+    default:
+        return lws_callback_http_dummy(wsi, reason, user, in, len);
+    }
+
+    return 0;
+}
+
+/* Updated protocols array */
 const struct lws_protocols protocols[] = {
-    { "http", lws_callback_http_dummy, 0, 0, 0, NULL, 0 },
+    { "http", callback_http, 0, 0, 0, NULL, 0 },
     LWS_PLUGIN_PROTOCOL_JAMBONZ,
     LWS_PROTOCOL_LIST_TERM
 };
@@ -149,3 +218,4 @@ callback_minimal(struct lws *wsi, enum lws_callback_reasons reason,
 
     return 0;
 }
+
