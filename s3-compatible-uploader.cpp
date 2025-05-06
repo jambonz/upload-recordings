@@ -17,6 +17,7 @@ S3CompatibleUploader::S3CompatibleUploader(const std::shared_ptr<Session>& sessi
     : StorageUploader(session), bucketName_(bucketName), region_(region), recordFileType_(ftype) {
     Aws::S3Crt::ClientConfiguration config;
     config.region = region;
+    config.maxConnections = getNumCpus() * 2;
 
     setLogger(log);
 
@@ -71,7 +72,6 @@ bool S3CompatibleUploader::upload(std::vector<char>& data, bool isFinalChunk) {
 }
 
 void S3CompatibleUploader::finalizeUpload() {
-
     std::string threadId = getThreadIdString();
     log_->info("S3CompatibleUploader::finalizeUpload thread id: {}", threadId);
 
@@ -98,7 +98,7 @@ void S3CompatibleUploader::finalizeUpload() {
 
     // Close the file stream if it is still open
     if (tempFile_.is_open()) {
-     tempFile_.close();
+        tempFile_.close();
     }
 
     // if this is a WAV file, we need to prepend a wave header
@@ -164,40 +164,51 @@ void S3CompatibleUploader::finalizeUpload() {
     // Attach the file stream to the request body
     auto inputStream = Aws::MakeShared<Aws::FStream>("PutObjectBody", finalFilePath.c_str(), std::ios::in | std::ios::binary);
     if (!inputStream->good()) {
-      // Retrieve specific error details
-      std::string errorMessage;
+        // Retrieve specific error details
+        std::string errorMessage;
 
-      if ((inputStream->rdstate() & std::ios::failbit) != 0) {
-          errorMessage += "Logical error on input/output operation. ";
-      }
-      if ((inputStream->rdstate() & std::ios::badbit) != 0) {
-          errorMessage += "Read/write error on file stream. ";
-      }
-      if ((inputStream->rdstate() & std::ios::eofbit) != 0) {
-          errorMessage += "End-of-File reached prematurely. ";
-      }
+        if ((inputStream->rdstate() & std::ios::failbit) != 0) {
+            errorMessage += "Logical error on input/output operation. ";
+        }
+        if ((inputStream->rdstate() & std::ios::badbit) != 0) {
+            errorMessage += "Read/write error on file stream. ";
+        }
+        if ((inputStream->rdstate() & std::ios::eofbit) != 0) {
+            errorMessage += "End-of-File reached prematurely. ";
+        }
 
-      // Use errno to get a system-level error message
-      errorMessage += std::strerror(errno);
+        // Use errno to get a system-level error message
+        errorMessage += std::strerror(errno);
 
-      log_->error("Failed to open temporary file for upload: {}. Error: {}", tempFilePath_, errorMessage);
-      upload_failed_ = true;
-      cleanupTempFile();
-      return;
+        log_->error("Failed to open temporary file for upload: {}. Error: {}", tempFilePath_, errorMessage);
+        upload_failed_ = true;
+        cleanupTempFile();
+        return;
     }
   
     putObjectRequest.SetBody(inputStream);
 
-    // Upload the file in one go
-    auto putObjectOutcome = s3CrtClient_->PutObject(putObjectRequest);
-    if (!putObjectOutcome.IsSuccess()) {
-        log_->error("S3CompatibleUploader Failed to upload file: {}: {}", tempFilePath_, putObjectOutcome.GetError().GetMessage());
-        upload_failed_ = true;
-    } else {
-        log_->info("File uploaded successfully: {} to {}", tempFilePath_, objectKey_);
-    }
-    if (recordFileType_ == RecordFileType::WAV) {
-        std::remove(finalFilePath.c_str());
-    }
-    cleanupTempFile();
+    // Create a shared pointer to store the final file path for cleanup in the callback
+    auto finalFilePathPtr = std::make_shared<std::string>(finalFilePath);
+
+    // Upload the file asynchronously
+    s3CrtClient_->PutObjectAsync(putObjectRequest, 
+        [this, finalFilePathPtr](const Aws::S3Crt::S3CrtClient* client,
+                                const Aws::S3Crt::Model::PutObjectRequest& request,
+                                const Aws::S3Crt::Model::PutObjectOutcome& outcome,
+                                const std::shared_ptr<const Aws::Client::AsyncCallerContext>& context) {
+            if (!outcome.IsSuccess()) {
+                log_->error("S3CompatibleUploader Failed to upload file: {}: {}", 
+                    tempFilePath_, outcome.GetError().GetMessage());
+                upload_failed_ = true;
+            } else {
+                log_->info("File uploaded successfully: {} to {}", tempFilePath_, objectKey_);
+            }
+            
+            // Cleanup after upload completes
+            if (recordFileType_ == RecordFileType::WAV) {
+                std::remove(finalFilePathPtr->c_str());
+            }
+            cleanupTempFile();
+        });
 }

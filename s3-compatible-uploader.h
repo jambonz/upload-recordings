@@ -7,9 +7,14 @@
 #include <aws/s3-crt/model/PutObjectRequest.h>
 #include <vector>
 #include <string>
+#include <thread>
 
 class S3CompatibleUploader : public StorageUploader {
 public:
+    static unsigned int getNumCpus() {
+        return std::thread::hardware_concurrency();
+    }
+    
     S3CompatibleUploader(const std::shared_ptr<Session>& session, 
       std::shared_ptr<spdlog::logger> log_,
       std::string& uploadFolder,
