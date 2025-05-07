@@ -6,6 +6,8 @@
 #include "wav-header.h"
 #include "string-utils.h"
 
+constexpr int UPLOAD_TIMEOUT_SECONDS = 300; // 5 minutes timeout
+
 S3CompatibleUploader::S3CompatibleUploader(const std::shared_ptr<Session>& session, 
     std::shared_ptr<spdlog::logger> log,
     std::string& uploadFolder,
@@ -66,37 +68,6 @@ S3CompatibleUploader::S3CompatibleUploader(const std::shared_ptr<Session>& sessi
         config.useVirtualAddressing = useVirtualAddressing;
         
         log_->info("Creating S3 compatible uploader for bucket:{}, endpoint {} ", bucketName, endpoint);
-        
-        // Test endpoint connectivity
-        try {
-            std::string testUrl = endpoint;
-            if (testUrl.back() != '/') {
-                testUrl += '/';
-            }
-            testUrl += bucketName;
-            
-            // Create a test request to check connectivity
-            Aws::S3Crt::Model::PutObjectRequest testRequest;
-            testRequest.SetBucket(bucketName);
-            testRequest.SetKey("test-connection");
-            testRequest.SetBody(Aws::MakeShared<Aws::StringStream>("TestConnection"));
-            
-            auto s3CrtClient = std::make_shared<Aws::S3Crt::S3CrtClient>(
-                Aws::MakeShared<Aws::Auth::SimpleAWSCredentialsProvider>("MemoryStreamAllocator", credentials),
-                config
-            );
-            
-            auto outcome = s3CrtClient->PutObject(testRequest);
-            if (!outcome.IsSuccess()) {
-                const auto& error = outcome.GetError();
-                log_->error("Failed to connect to S3 endpoint: Error Type: {}, Error Message: {}, Request ID: {}", 
-                    static_cast<int>(error.GetErrorType()),
-                    error.GetMessage(),
-                    error.GetRequestId());
-            }
-        } catch (const std::exception& e) {
-            log_->error("Exception while testing endpoint connectivity: {}", e.what());
-        }
     } else {
         log_->info("Creating S3 uploader for bucket: {} in region {}", bucketName, region);
     }
@@ -267,6 +238,8 @@ void S3CompatibleUploader::finalizeUpload() {
         auto promise = std::make_shared<std::promise<void>>();
         auto future = promise->get_future();
         
+        log_->info("Starting upload of file: {} to {}", tempFilePath_, objectKey_);
+        
         s3CrtClient_->PutObjectAsync(putObjectRequest, 
             [this, finalFilePathPtr, promise, startTime](const Aws::S3Crt::S3CrtClient* client,
                                     const Aws::S3Crt::Model::PutObjectRequest& request,
@@ -304,9 +277,9 @@ void S3CompatibleUploader::finalizeUpload() {
             });
             
         // Wait for the upload to complete with a timeout
-        auto status = future.wait_for(std::chrono::seconds(300)); // 5 minutes timeout
+        auto status = future.wait_for(std::chrono::seconds(UPLOAD_TIMEOUT_SECONDS));
         if (status == std::future_status::timeout) {
-            log_->error("Upload operation timed out after 300 seconds");
+            log_->error("Upload operation timed out after {} seconds", UPLOAD_TIMEOUT_SECONDS);
             upload_failed_ = true;
         } else {
             try {
