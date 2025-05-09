@@ -66,7 +66,7 @@ public:
 
 private:
     static constexpr size_t BUFFER_PROCESS_SIZE = 1 * 1024 * 1024; // 1MB
-    static constexpr size_t MAX_BUFFER_SIZE = 1.1 * 1024 * 1024;
+    static constexpr size_t MAX_BUFFER_SIZE = 1.4 * 1024 * 1024;
 
     static std::once_flag initFlag_;
     static std::string uploadFolder_;
