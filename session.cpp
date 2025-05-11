@@ -1,3 +1,6 @@
+
+#include <regex>
+
 #include "session.h"
 #include "s3-compatible-uploader.h"
 #include "azure-uploader.h"
@@ -251,11 +254,6 @@ void Session::parseAwsCredentials(const std::string& credentials) {
     secret_key_ = secretKey->valuestring;
   }
 
-  cJSON* region = cJSON_AS4CPP_GetObjectItem(json, "region");
-  if (region && cJSON_AS4CPP_IsString(region)) {
-    region_ = region->valuestring;
-  }
-
   cJSON* bucketName = cJSON_AS4CPP_GetObjectItem(json, "name");
   if (bucketName && cJSON_AS4CPP_IsString(bucketName)) {
     bucket_name_ = bucketName->valuestring;
@@ -264,6 +262,16 @@ void Session::parseAwsCredentials(const std::string& credentials) {
   cJSON* endpoint = cJSON_AS4CPP_GetObjectItem(json, "endpoint");
   if (endpoint && cJSON_AS4CPP_IsString(endpoint)) {
     custom_endpoint_ = endpoint->valuestring;
+  }
+
+  // First try to get region from the "region" property
+  cJSON* region = cJSON_AS4CPP_GetObjectItem(json, "region");
+  if (region && cJSON_AS4CPP_IsString(region)) {
+    region_ = region->valuestring;
+  } 
+  // If no region was found but we have an endpoint, try to extract region from endpoint
+  else if (!custom_endpoint_.empty()) {
+    extractRegionFromEndpoint(custom_endpoint_, region_);
   }
 
   cJSON_AS4CPP_Delete(json);
@@ -443,4 +451,21 @@ std::unique_ptr<StorageUploader> Session::createStorageUploader(RecordFileType f
     log_->error("Failed to create storage uploader: {}", e.what());
     return nullptr;
   }
+}
+
+void Session::extractRegionFromEndpoint(const std::string& endpoint, std::string& regionVar) {
+  // This regex looks for:
+  // 1. Optional protocol (http:// or https://) or start of string
+  // 2. "s3." prefix
+  // 3. A region segment containing a hyphen
+  // 4. Followed by a period and at least two more domain segments
+  std::regex region_pattern(R"((^|://|^)s3\.([^\.]+\-[^\.]+)\.[^\.]+\.[^\.]+)");
+  std::smatch matches;
+  
+  if (std::regex_search(endpoint, matches, region_pattern) && matches.size() > 2) {
+    // Only update the region variable if we successfully extracted a region
+    regionVar = matches[2].str();
+    log_->info("Extracted region from endpoint: {}", regionVar);
+  }
+  // If no match is found, regionVar remains unchanged
 }
