@@ -116,7 +116,8 @@ private:
     void parseAzureCredentials(const std::string& credentials);
     void parseGoogleCredentials(const std::string& credentials);
     void parseMetadata(cJSON* json);
-
+    void extractRegionFromEndpoint(const std::string& endpoint, std::string& regionVar);
+    
     // Factory method for creating a StorageUploader
     std::unique_ptr<StorageUploader> createStorageUploader(RecordFileType ftype);
 };
