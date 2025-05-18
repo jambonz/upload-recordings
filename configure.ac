@@ -2,6 +2,10 @@
 AC_INIT([upload_recordings], [1.0], [youremail@example.com])
 AC_PREREQ([2.69])
 
+# Define required macros
+m4_pattern_allow([AC_MSG_ERROR])
+m4_pattern_allow([PKG_CHECK_MODULES])
+
 # Initialize Automake
 AM_INIT_AUTOMAKE([foreign])
 
@@ -19,6 +23,9 @@ AC_PATH_PROG([PKG_CONFIG], [pkg-config], [no])
 if test "$PKG_CONFIG" = "no"; then
   AC_MSG_ERROR([pkg-config is required but was not found])
 fi
+
+# Initialize pkg-config
+PKG_PROG_PKG_CONFIG
 
 # Check for libwebsockets using pkg-config
 PKG_CHECK_MODULES([LIBWEBSOCKETS], [libwebsockets >= 4.0],
