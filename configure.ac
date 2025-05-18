@@ -2,6 +2,10 @@
 AC_INIT([upload_recordings], [1.0], [youremail@example.com])
 AC_PREREQ([2.69])
 
+# Define required macros
+m4_pattern_allow([AC_MSG_ERROR])
+m4_pattern_allow([PKG_CHECK_MODULES])
+
 # Initialize Automake
 AM_INIT_AUTOMAKE([foreign])
 
@@ -13,6 +17,9 @@ AC_PROG_CC
 
 # Check for the C++ compiler
 AC_PROG_CXX
+
+# Initialize pkg-config
+PKG_PROG_PKG_CONFIG
 
 # Check for pkg-config
 AC_PATH_PROG([PKG_CONFIG], [pkg-config], [no])

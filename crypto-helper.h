@@ -40,15 +40,19 @@ class CryptoHelper {
 public:
     CryptoHelper(const std::string &algorithm = "aes-256-cbc")
         : algorithm_(algorithm) {
-        // Retrieve the encryption secret from the environment variable
-        const char *envSecret = std::getenv("ENCRYPTION_SECRET");
-        if (!envSecret) {
-            throw std::runtime_error("ENCRYPTION_SECRET environment variable is not set");
-        }
-        encryptionSecret_ = std::string(envSecret);
+        // Don't check for ENCRYPTION_SECRET in constructor
     }
 
     std::string decrypt(const std::string &encryptedData) {
+        // Check for ENCRYPTION_SECRET when actually needed
+        if (encryptionSecret_.empty()) {
+            const char *envSecret = std::getenv("ENCRYPTION_SECRET");
+            if (!envSecret) {
+                throw std::runtime_error("ENCRYPTION_SECRET environment variable is not set");
+            }
+            encryptionSecret_ = std::string(envSecret);
+        }
+
         //std::cout << "Decrypting data: " << encryptedData << std::endl;
 
         std::string ivHex, contentHex;

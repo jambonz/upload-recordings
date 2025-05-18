@@ -70,6 +70,20 @@ int main(int argc, const char **argv) {
     // Set it as the default logger
     spdlog::set_default_logger(logger);
 
+    // Check for version flag first, before any other logging
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "-v") == 0 || std::strcmp(argv[i], "--version") == 0) {
+            std::cout << "jambonz recording server (ws) version " << UPLOADER_VERSION << std::endl;
+            return 0;
+        }
+    }
+
+    // Check for required environment variables only if we're actually starting the server
+    const char* encryption_secret = std::getenv("ENCRYPTION_SECRET");
+    if (!encryption_secret) {
+        throw std::runtime_error("ENCRYPTION_SECRET environment variable is not set");
+    }
+
     std::string threadId = getThreadIdString();
     spdlog::info("Main thread id: {}", threadId);
 
