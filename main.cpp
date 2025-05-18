@@ -78,6 +78,12 @@ int main(int argc, const char **argv) {
         }
     }
 
+    // Check for required environment variables only if we're actually starting the server
+    const char* encryption_secret = std::getenv("ENCRYPTION_SECRET");
+    if (!encryption_secret) {
+        throw std::runtime_error("ENCRYPTION_SECRET environment variable is not set");
+    }
+
     std::string threadId = getThreadIdString();
     spdlog::info("Main thread id: {}", threadId);
 

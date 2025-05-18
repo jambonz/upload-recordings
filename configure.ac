@@ -18,14 +18,14 @@ AC_PROG_CC
 # Check for the C++ compiler
 AC_PROG_CXX
 
+# Initialize pkg-config
+PKG_PROG_PKG_CONFIG
+
 # Check for pkg-config
 AC_PATH_PROG([PKG_CONFIG], [pkg-config], [no])
 if test "$PKG_CONFIG" = "no"; then
   AC_MSG_ERROR([pkg-config is required but was not found])
 fi
-
-# Initialize pkg-config
-PKG_PROG_PKG_CONFIG
 
 # Check for libwebsockets using pkg-config
 PKG_CHECK_MODULES([LIBWEBSOCKETS], [libwebsockets >= 4.0],
