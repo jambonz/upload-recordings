@@ -109,13 +109,13 @@ private:
     
     // Processing methods that run in the thread pool
     void processMetadata();
-    void processBuffer(bool isFinal);
+    void processBuffer(std::vector<char>&& buffer, bool isFinal);
 
     // Credential parsing methods (unchanged)
+    void parseMetadata(cJSON* json);
     void parseAwsCredentials(const std::string& credentials);
     void parseAzureCredentials(const std::string& credentials);
     void parseGoogleCredentials(const std::string& credentials);
-    void parseMetadata(cJSON* json);
     void extractRegionFromEndpoint(const std::string& endpoint, std::string& regionVar);
     
     // Factory method for creating a StorageUploader

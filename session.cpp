@@ -1,4 +1,3 @@
-
 #include <regex>
 
 #include "session.h"
@@ -102,9 +101,20 @@ void Session::postProcessMetadataTask() {
 void Session::postProcessBufferTask(bool isFinal) {
     auto self = shared_from_this();
     
-    // Post to strand to ensure sequential processing
+    // First, post to strand to safely extract the buffer
     boost::asio::post(strand_, [self, isFinal]() {
-        self->processBuffer(isFinal);
+        std::vector<char> localBuffer;
+        {
+            std::unique_lock<std::mutex> lock(self->mutex_);
+            if (!self->buffer_.empty()) {
+                std::swap(localBuffer, self->buffer_);
+            }
+        }
+        
+        // Now post the actual processing to the thread pool directly
+        ThreadPool::getInstance().post([self, localBuffer = std::move(localBuffer), isFinal]() {
+            self->processBuffer(localBuffer, isFinal);
+        });
     });
 }
 
@@ -174,66 +184,35 @@ void Session::processMetadata() {
     }
 }
 
-void Session::processBuffer(bool isFinal) {
-  std::vector<char> localBuffer;
-  bool process_buffer = false;
-  
-  {
-      std::unique_lock<std::mutex> lock(mutex_);
-      
-      if (!buffer_.empty()) {
-          std::swap(localBuffer, buffer_);
-          
-          // Handle misalignment in the swapped buffer
-          size_t numSamples = localBuffer.size() / sizeof(short); // Total samples in localBuffer
-          size_t remainder = numSamples % 2;    // Do we have the same num samples for both channels?
-
-          if (remainder != 0) {
-              log_->info("Misaligned buffer: {} samples", numSamples);
-              // Calculate the size of the trailing odd sample (in bytes)
-              size_t leftoverSize = remainder * sizeof(short);
-
-              // Move the trailing sample(s) back to the now-empty buffer_
-              buffer_.insert(buffer_.end(), localBuffer.end() - leftoverSize, localBuffer.end());
-
-              // Remove the trailing sample(s) from localBuffer
-              localBuffer.resize(localBuffer.size() - leftoverSize);
-          }
-          
-          process_buffer = true;
-      }
-  }
-  
-  // Process the buffer if we have data
-  if (process_buffer) {
-      log_->info("Processing buffer of size: {}", localBuffer.size());
-      
-      if (mp3Encoder_) {
-          mp3Encoder_->encodeInPlace(localBuffer);
-      }
-      
-      if (storageUploader_) {
-          if (!storageUploader_->upload(localBuffer, isFinal)) {
-              log_->error("Upload failed.");
-              //TODO: handle error somehow? End session??
-          }
-      }
-  }
-  else if (isFinal) {
-    if (storageUploader_) {
-      std::string threadId = getThreadIdString();
-      log_->info("uploading recording in threadId: {}", threadId);  
-  
-      storageUploader_->upload(localBuffer, isFinal);
+void Session::processBuffer(std::vector<char>&& buffer, bool isFinal) {
+    if (!buffer.empty()) {
+        log_->info("Processing buffer of size: {}", buffer.size());
+        
+        if (mp3Encoder_) {
+            mp3Encoder_->encodeInPlace(buffer);
+        }
+        
+        if (storageUploader_) {
+            if (!storageUploader_->upload(buffer, isFinal)) {
+                log_->error("Upload failed.");
+            }
+        }
     }
-    else {
-      // Here we have the case where we did not get metadata so we have no uploader
-      // We need to orchestrate the destruction of this Session at this point
-      log_->warn("Session::processBuffer connection closed but no StorageUploader.");
-      auto self = shared_from_this();
-      ConnectionManager::getInstance().destroySession(self.get());
+    else if (isFinal) {
+        if (storageUploader_) {
+            std::string threadId = getThreadIdString();
+            log_->info("uploading recording in threadId: {}", threadId);  
+            
+            storageUploader_->upload(buffer, isFinal);
+        }
+        else {
+            // Here we have the case where we did not get metadata so we have no uploader
+            // We need to orchestrate the destruction of this Session at this point
+            log_->warn("Session::processBuffer connection closed but no StorageUploader.");
+            auto self = shared_from_this();
+            ConnectionManager::getInstance().destroySession(self.get());
+        }
     }
-  }
 }
 
 void Session::parseAwsCredentials(const std::string& credentials) {
