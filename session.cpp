@@ -128,8 +128,8 @@ void Session::postProcessBufferTask(bool isFinal) {
         }
         
         // Now post the actual processing to the thread pool directly
-        ThreadPool::getInstance().post([self, localBuffer = std::move(localBuffer), isFinal]() {
-            self->processBuffer(localBuffer, isFinal);
+        ThreadPool::getInstance().post([self, buffer = std::move(localBuffer), isFinal]() {
+            self->processBuffer(std::move(buffer), isFinal);
         });
     });
 }
