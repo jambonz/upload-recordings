@@ -108,6 +108,22 @@ void Session::postProcessBufferTask(bool isFinal) {
             std::unique_lock<std::mutex> lock(self->mutex_);
             if (!self->buffer_.empty()) {
                 std::swap(localBuffer, self->buffer_);
+                
+                // Handle misalignment in the swapped buffer
+                size_t numSamples = localBuffer.size() / sizeof(short); // Total samples in localBuffer
+                size_t remainder = numSamples % 2;    // Do we have the same num samples for both channels?
+
+                if (remainder != 0) {
+                    self->log_->info("Misaligned buffer: {} samples", numSamples);
+                    // Calculate the size of the trailing odd sample (in bytes)
+                    size_t leftoverSize = remainder * sizeof(short);
+
+                    // Move the trailing sample(s) back to the now-empty buffer_
+                    self->buffer_.insert(self->buffer_.end(), localBuffer.end() - leftoverSize, localBuffer.end());
+
+                    // Remove the trailing sample(s) from localBuffer
+                    localBuffer.resize(localBuffer.size() - leftoverSize);
+                }
             }
         }
         
@@ -116,6 +132,37 @@ void Session::postProcessBufferTask(bool isFinal) {
             self->processBuffer(localBuffer, isFinal);
         });
     });
+}
+
+void Session::processBuffer(std::vector<char>&& buffer, bool isFinal) {
+    if (!buffer.empty()) {
+        log_->info("Processing buffer of size: {}", buffer.size());
+        
+        if (mp3Encoder_) {
+            mp3Encoder_->encodeInPlace(buffer);
+        }
+        
+        if (storageUploader_) {
+            if (!storageUploader_->upload(buffer, isFinal)) {
+                log_->error("Upload failed.");
+            }
+        }
+    }
+    else if (isFinal) {
+        if (storageUploader_) {
+            std::string threadId = getThreadIdString();
+            log_->info("uploading recording in threadId: {}", threadId);  
+            
+            storageUploader_->upload(buffer, isFinal);
+        }
+        else {
+            // Here we have the case where we did not get metadata so we have no uploader
+            // We need to orchestrate the destruction of this Session at this point
+            log_->warn("Session::processBuffer connection closed but no StorageUploader.");
+            auto self = shared_from_this();
+            ConnectionManager::getInstance().destroySession(self.get());
+        }
+    }
 }
 
 void Session::processMetadata() {
@@ -181,37 +228,6 @@ void Session::processMetadata() {
         }
     } catch (const std::exception &e) {
         log_->error("Failed to fetch or decrypt record credentials: {}", e.what());
-    }
-}
-
-void Session::processBuffer(std::vector<char>&& buffer, bool isFinal) {
-    if (!buffer.empty()) {
-        log_->info("Processing buffer of size: {}", buffer.size());
-        
-        if (mp3Encoder_) {
-            mp3Encoder_->encodeInPlace(buffer);
-        }
-        
-        if (storageUploader_) {
-            if (!storageUploader_->upload(buffer, isFinal)) {
-                log_->error("Upload failed.");
-            }
-        }
-    }
-    else if (isFinal) {
-        if (storageUploader_) {
-            std::string threadId = getThreadIdString();
-            log_->info("uploading recording in threadId: {}", threadId);  
-            
-            storageUploader_->upload(buffer, isFinal);
-        }
-        else {
-            // Here we have the case where we did not get metadata so we have no uploader
-            // We need to orchestrate the destruction of this Session at this point
-            log_->warn("Session::processBuffer connection closed but no StorageUploader.");
-            auto self = shared_from_this();
-            ConnectionManager::getInstance().destroySession(self.get());
-        }
     }
 }
 
