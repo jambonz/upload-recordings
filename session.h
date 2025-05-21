@@ -65,8 +65,8 @@ public:
     }
 
 private:
-    static constexpr size_t BUFFER_PROCESS_SIZE = 1 * 1024 * 1024; // 1MB
-    static constexpr size_t MAX_BUFFER_SIZE = 1.4 * 1024 * 1024;
+    static constexpr size_t BUFFER_PROCESS_SIZE = 512 * 1024; // 512KB
+    static constexpr size_t MAX_BUFFER_SIZE = 3 * 1024 * 1024; // 3MB
 
     static std::once_flag initFlag_;
     static std::string uploadFolder_;
@@ -109,13 +109,13 @@ private:
     
     // Processing methods that run in the thread pool
     void processMetadata();
-    void processBuffer(std::vector<char>&& buffer, bool isFinal);
+    void processBuffer(bool isFinal);
 
     // Credential parsing methods (unchanged)
-    void parseMetadata(cJSON* json);
     void parseAwsCredentials(const std::string& credentials);
     void parseAzureCredentials(const std::string& credentials);
     void parseGoogleCredentials(const std::string& credentials);
+    void parseMetadata(cJSON* json);
     void extractRegionFromEndpoint(const std::string& endpoint, std::string& regionVar);
     
     // Factory method for creating a StorageUploader
