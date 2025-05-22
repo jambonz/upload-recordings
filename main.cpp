@@ -15,6 +15,7 @@
 #include "thread-pool.h"
 #include "connection-manager.h"
 #include "string-utils.h"
+#include "s3-client-manager.h"
 
 extern const struct lws_protocols protocols[];
 
@@ -245,6 +246,7 @@ int main(int argc, const char **argv) {
                 
         // Shutdown thread pool
         threadPool.shutdown();
+        S3ClientManager::getInstance().shutdown();
     } catch (const std::exception &e) {
         std::cerr << "Exception: " << e.what() << std::endl;
     }

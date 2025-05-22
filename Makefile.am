@@ -11,7 +11,8 @@ upload_recordings_SOURCES = main.cpp \
   azure-uploader.cpp \
   google-uploader.cpp \
   upload-utils.cpp \
-  mysql-helper.cpp 
+  mysql-helper.cpp \
+  s3-client-manager.cpp
 
 # Note: No need for thread-pool.cpp and connection-manager.cpp which are header-only
 

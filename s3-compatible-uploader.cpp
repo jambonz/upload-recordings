@@ -5,9 +5,10 @@
 #include "s3-compatible-uploader.h"
 #include "wav-header.h"
 #include "string-utils.h"
-#include "session.h" // Include for accessing global config
+#include "s3-client-manager.h"
+#include "session.h" 
 
-constexpr int UPLOAD_TIMEOUT_SECONDS = 300; // 5 minutes timeout
+constexpr int UPLOAD_TIMEOUT_SECONDS = 600; // 10 minutes timeout
 
 S3CompatibleUploader::S3CompatibleUploader(const std::shared_ptr<Session>& session, 
     std::shared_ptr<spdlog::logger> log,
@@ -77,9 +78,11 @@ S3CompatibleUploader::S3CompatibleUploader(const std::shared_ptr<Session>& sessi
                    bucketName, region, config.maxConnections);
     }
 
-    s3CrtClient_ = std::make_shared<Aws::S3Crt::S3CrtClient>(
-        Aws::MakeShared<Aws::Auth::SimpleAWSCredentialsProvider>("MemoryStreamAllocator", credentials),
-        config
+    s3CrtClient_ = S3ClientManager::getInstance().getClient(
+        credentials,      // Different per tenant
+        region,          // Different per tenant
+        customEndpoint,  // Different per tenant  
+        Session::getAwsMaxConnections()  // e.g., 150 connections per tenant
     );
 
     // Create a temporary file for buffering data
