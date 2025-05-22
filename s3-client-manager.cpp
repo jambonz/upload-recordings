@@ -1,9 +1,5 @@
 // s3-client-manager.cpp
 #include "s3-client-manager.h"
-#include <aws/s3-crt/S3CrtClient.h>
-#include <aws/s3-crt/S3CrtClientConfiguration.h>
-#include <aws/core/auth/SimpleAWSCredentialsProvider.h>
-#include <aws/core/client/DefaultRetryStrategy.h>
 
 std::shared_ptr<Aws::S3Crt::S3CrtClient> S3ClientManager::getClient(
     const Aws::Auth::AWSCredentials& credentials,
