@@ -5,7 +5,7 @@
 #include "s3-compatible-uploader.h"
 #include "wav-header.h"
 #include "string-utils.h"
-#include "config.h"
+#include "session.h" // Include for accessing global config
 
 constexpr int UPLOAD_TIMEOUT_SECONDS = 300; // 5 minutes timeout
 
@@ -20,7 +20,9 @@ S3CompatibleUploader::S3CompatibleUploader(const std::shared_ptr<Session>& sessi
     : StorageUploader(session), bucketName_(bucketName), region_(region), recordFileType_(ftype) {
     Aws::S3Crt::ClientConfiguration config;
     config.region = region;
-    config.maxConnections = Config::getInstance().getAwsMaxConnections();
+    
+    // Use configurable AWS connection count instead of hardcoded value
+    config.maxConnections = Session::getAwsMaxConnections();
     
     // Add connection settings
     config.connectTimeoutMs = 3000;  // 3 seconds
@@ -68,9 +70,11 @@ S3CompatibleUploader::S3CompatibleUploader(const std::shared_ptr<Session>& sessi
         
         config.useVirtualAddressing = useVirtualAddressing;
         
-        log_->info("Creating S3 compatible uploader for bucket:{}, endpoint {} ", bucketName, endpoint);
+        log_->info("Creating S3 compatible uploader for bucket:{}, endpoint {}, max connections: {}", 
+                   bucketName, endpoint, config.maxConnections);
     } else {
-        log_->info("Creating S3 uploader for bucket: {} in region {}", bucketName, region);
+        log_->info("Creating S3 uploader for bucket: {} in region {}, max connections: {}", 
+                   bucketName, region, config.maxConnections);
     }
 
     s3CrtClient_ = std::make_shared<Aws::S3Crt::S3CrtClient>(
@@ -81,6 +85,8 @@ S3CompatibleUploader::S3CompatibleUploader(const std::shared_ptr<Session>& sessi
     // Create a temporary file for buffering data
     createTempFile(uploadFolder);
 }
+
+// ... [Rest of the methods remain the same - upload, finalizeUpload, etc.] ...
 
 S3CompatibleUploader::~S3CompatibleUploader() {
 }

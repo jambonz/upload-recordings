@@ -12,7 +12,6 @@
 #include <spdlog/sinks/stdout_sinks.h>
 #include <memory>
 
-#include "config.h"
 #include "thread-pool.h"
 #include "connection-manager.h"
 #include "string-utils.h"
@@ -35,7 +34,6 @@ void sigint_handler(int sig) {
     interrupted = true;
 }
 
-
 // Parse command-line arguments
 int parse_port(int argc, const char **argv, int default_port) {
   for (int i = 1; i < argc; ++i) {
@@ -56,11 +54,69 @@ int parse_thread_count(int argc, const char **argv) {
     return std::thread::hardware_concurrency(); // Default to hardware concurrency
 }
 
+// Parse AWS max connections from command line
+int parse_aws_max_connections(int argc, const char **argv) {
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--aws-max-connections") == 0 && i + 1 < argc) {
+            return std::atoi(argv[i + 1]);
+        }
+    }
+    return std::thread::hardware_concurrency() * 2; // Default to CPU count * 2
+}
+
+// Parse buffer process size from command line (in KB)
+size_t parse_buffer_process_size(int argc, const char **argv) {
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--buffer-process-size") == 0 && i + 1 < argc) {
+            return std::atoi(argv[i + 1]) * 1024; // Convert KB to bytes
+        }
+    }
+    return 512 * 1024; // Default 512KB
+}
+
+// Parse max buffer size from command line (in MB)
+size_t parse_max_buffer_size(int argc, const char **argv) {
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--max-buffer-size") == 0 && i + 1 < argc) {
+            return std::atoi(argv[i + 1]) * 1024 * 1024; // Convert MB to bytes
+        }
+    }
+    return 3 * 1024 * 1024; // Default 3MB
+}
+
+void print_usage(const char* program_name) {
+    std::cout << "Usage: " << program_name << " [OPTIONS]\n"
+              << "Options:\n"
+              << "  --port PORT                   Server port (default: 3017)\n"
+              << "  --threads COUNT               Thread pool size (default: CPU count)\n"
+              << "  --aws-max-connections COUNT   AWS S3 max connections (default: CPU count * 2)\n"
+              << "  --buffer-process-size KB      Buffer processing threshold in KB (default: 512)\n"
+              << "  --max-buffer-size MB          Maximum buffer size per session in MB (default: 3)\n"
+              << "  -v, --version                 Show version\n"
+              << "  -h, --help                    Show this help\n"
+              << "  -d LOG_LEVEL                  LWS debug log level\n"
+              << "  -s                            Enable TLS\n"
+              << "\nEnvironment Variables:\n"
+              << "  LOG_LEVEL                     Application log level (debug, info, warn, error)\n"
+              << "  ENCRYPTION_SECRET             Required for credential decryption\n"
+              << "  JAMBONZ_UPLOADER_TMP_FOLDER   Temporary upload folder (default: /tmp/uploads)\n"
+              << "  BASIC_AUTH_USERNAME           WebSocket basic auth username\n"
+              << "  BASIC_AUTH_PASSWORD           WebSocket basic auth password\n";
+}
+
 int main(int argc, const char **argv) {
     lws_context_creation_info info;
     lws_context *context;
     const char *p;
     int n = 0;
+
+    // Check for help flag first
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "-h") == 0 || std::strcmp(argv[i], "--help") == 0) {
+            print_usage(argv[0]);
+            return 0;
+        }
+    }
 
     // Create a non-colored stdout sink
     auto stdout_sink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
@@ -70,9 +126,6 @@ int main(int argc, const char **argv) {
 
     // Set it as the default logger
     spdlog::set_default_logger(logger);
-
-    // Initialize configuration from environment variables
-    Config::getInstance().initializeFromEnv();
 
     // Check for version flag first, before any other logging
     for (int i = 1; i < argc; ++i) {
@@ -106,23 +159,35 @@ int main(int argc, const char **argv) {
     }
     spdlog::set_level(level);
     
-    // Parse thread count from command line
+    // Parse configuration from command line
     int thread_count = parse_thread_count(argc, argv);
-    spdlog::info("Number of threads in thread pool: {}", thread_count);
+    int aws_max_connections = parse_aws_max_connections(argc, argv);
+    size_t buffer_process_size = parse_buffer_process_size(argc, argv);
+    size_t max_buffer_size = parse_max_buffer_size(argc, argv);
+    int port = parse_port(argc, argv, 3017);
+    
+    spdlog::info("Configuration:");
+    spdlog::info("  Thread pool size: {}", thread_count);
+    spdlog::info("  AWS max connections: {}", aws_max_connections);
+    spdlog::info("  Buffer process size: {} KB", buffer_process_size / 1024);
+    spdlog::info("  Max buffer size: {} MB", max_buffer_size / (1024 * 1024));
+    spdlog::info("  Server port: {}", port);
     
     Aws::SDKOptions options;
     try {
         options.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Debug;
         Aws::InitAPI(options);
 
-        // Initialize the thread pool
-        auto& threadPool = ThreadPool::getInstance();
+        // Initialize the thread pool with parsed thread count
+        auto& threadPool = ThreadPool::getInstance(thread_count);
         
         // Initialize the connection manager
         auto& connectionManager = ConnectionManager::getInstance();
+        
+        // Set global configuration values for Session class
+        Session::setGlobalConfig(buffer_process_size, max_buffer_size, aws_max_connections);
 
         int logs = LLL_ERR | LLL_WARN;
-        int port = parse_port(argc, argv, 3017); // Default to 3017 if --port is not provided
 
         // Set the SIGINT handler
         std::signal(SIGINT, sigint_handler);
@@ -134,8 +199,8 @@ int main(int argc, const char **argv) {
         }
 
         lws_set_log_level(logs, nullptr);
-        spdlog::info("jambonz recording server (ws) version {} | Listening on http://localhost:{} | Thread pool size: {}", 
-            UPLOADER_VERSION, port, thread_count);
+        spdlog::info("jambonz recording server (ws) version {} | Listening on http://localhost:{}", 
+            UPLOADER_VERSION, port);
         
         // Initialize info struct
         std::memset(&info, 0, sizeof(info));

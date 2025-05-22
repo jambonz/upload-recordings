@@ -9,13 +9,12 @@
 #include <atomic>
 #include <spdlog/spdlog.h>
 #include "string-utils.h"
-#include "config.h"
 
 class ThreadPool {
 public:
-    // Singleton pattern for global thread pool access
-    static ThreadPool& getInstance() {
-        static ThreadPool instance;
+    // Singleton pattern with configurable thread count
+    static ThreadPool& getInstance(int num_threads = 0) {
+        static ThreadPool instance(num_threads > 0 ? num_threads : std::thread::hardware_concurrency());
         return instance;
     }
 
@@ -63,21 +62,21 @@ public:
     }
 
 private:
-    // Private constructor (singleton)
-    ThreadPool()
+    // Private constructor (singleton) - now takes configurable thread count
+    ThreadPool(int num_threads)
         : io_context_(),
           work_guard_(boost::asio::make_work_guard(io_context_)),
           tasks_queued_(0),
           tasks_active_(0) {
         
-        size_t num_threads = Config::getInstance().getThreadPoolSize();
         spdlog::info("Creating thread pool with {} threads", num_threads);
         
         // Create worker threads
-        for (size_t i = 0; i < num_threads; ++i) {
+        for (int i = 0; i < num_threads; ++i) {
             threads_.emplace_back([this, i]() {
                 try {
-                    std::string threadId = getThreadIdString();
+                  std::string threadId = getThreadIdString();
+              
                     spdlog::info("Thread pool worker {} started, thread id: {}", i, threadId);
                     io_context_.run();
                     spdlog::info("Thread pool worker {} exiting, thread id: {}", i, threadId);

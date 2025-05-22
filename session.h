@@ -1,4 +1,4 @@
-// session.h (Modified version)
+// session.h (Modified version with configurable parameters)
 #ifndef _SESSION_H_
 #define _SESSION_H_
 
@@ -23,7 +23,6 @@
 #include "mysql-helper.h"
 #include "crypto-helper.h"
 #include "storage-uploader.h"
-#include "config.h"
 
 enum class StorageService {
     AWS_S3,
@@ -53,6 +52,18 @@ public:
         return uploadFolder_;
     }
 
+    // Set global configuration values (called from main)
+    static void setGlobalConfig(size_t bufferProcessSize, size_t maxBufferSize, int awsMaxConnections) {
+        bufferProcessSize_ = bufferProcessSize;
+        maxBufferSize_ = maxBufferSize;
+        awsMaxConnections_ = awsMaxConnections;
+    }
+
+    // Getters for configuration values
+    static size_t getBufferProcessSize() { return bufferProcessSize_; }
+    static size_t getMaxBufferSize() { return maxBufferSize_; }
+    static int getAwsMaxConnections() { return awsMaxConnections_; }
+
     void setContext(const std::string& account_sid, const std::string& call_sid);
 
     // Add data to the session buffer
@@ -66,6 +77,11 @@ public:
     }
 
 private:
+    // Static configuration values (set from command line)
+    static size_t bufferProcessSize_;  // Configurable buffer process threshold
+    static size_t maxBufferSize_;      // Configurable max buffer size
+    static int awsMaxConnections_;     // Configurable AWS max connections
+
     static std::once_flag initFlag_;
     static std::string uploadFolder_;
     static CryptoHelper cryptoHelper_;
