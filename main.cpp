@@ -15,6 +15,7 @@
 #include "thread-pool.h"
 #include "connection-manager.h"
 #include "string-utils.h"
+#include "config.h"
 
 extern const struct lws_protocols protocols[];
 
@@ -69,6 +70,9 @@ int main(int argc, const char **argv) {
 
     // Set it as the default logger
     spdlog::set_default_logger(logger);
+
+    // Initialize configuration from environment variables
+    Config::getInstance().initializeFromEnv();
 
     // Check for version flag first, before any other logging
     for (int i = 1; i < argc; ++i) {

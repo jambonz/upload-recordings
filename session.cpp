@@ -1,4 +1,3 @@
-
 #include <regex>
 
 #include "session.h"
@@ -7,6 +6,7 @@
 #include "google-uploader.h"
 #include "connection-manager.h"
 #include "string-utils.h"
+#include "config.h"
 
 // Static member initialization
 std::once_flag Session::initFlag_;
@@ -49,8 +49,8 @@ void Session::addData(int isBinary, const char *data, size_t len) {
     {
         std::unique_lock<std::mutex> lock(mutex_);
 
-        // Check for overflow
-        if (buffer_.size() + len > MAX_BUFFER_SIZE) {
+        // Check for overflow using configurable max buffer size
+        if (buffer_.size() + len > Config::getInstance().getMaxBufferSize()) {
             log_->error("Buffer overflow: dropping data, buffer size is {}", buffer_.size());
             return;
         }
@@ -59,7 +59,7 @@ void Session::addData(int isBinary, const char *data, size_t len) {
             buffer_.insert(buffer_.end(), data, data + len);
 
             // Process the buffer if it reaches the threshold
-            if (buffer_.size() >= BUFFER_PROCESS_SIZE) {
+            if (buffer_.size() >= Config::getInstance().getBufferProcessSize()) {
                 should_process = true;
             }
         } 

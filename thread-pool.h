@@ -9,6 +9,7 @@
 #include <atomic>
 #include <spdlog/spdlog.h>
 #include "string-utils.h"
+#include "config.h"
 
 class ThreadPool {
 public:
@@ -63,20 +64,20 @@ public:
 
 private:
     // Private constructor (singleton)
-    ThreadPool(int num_threads = std::thread::hardware_concurrency())
+    ThreadPool()
         : io_context_(),
           work_guard_(boost::asio::make_work_guard(io_context_)),
           tasks_queued_(0),
           tasks_active_(0) {
         
+        size_t num_threads = Config::getInstance().getThreadPoolSize();
         spdlog::info("Creating thread pool with {} threads", num_threads);
         
         // Create worker threads
-        for (int i = 0; i < num_threads; ++i) {
+        for (size_t i = 0; i < num_threads; ++i) {
             threads_.emplace_back([this, i]() {
                 try {
-                  std::string threadId = getThreadIdString();
-              
+                    std::string threadId = getThreadIdString();
                     spdlog::info("Thread pool worker {} started, thread id: {}", i, threadId);
                     io_context_.run();
                     spdlog::info("Thread pool worker {} exiting, thread id: {}", i, threadId);

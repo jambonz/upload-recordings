@@ -23,6 +23,7 @@
 #include "mysql-helper.h"
 #include "crypto-helper.h"
 #include "storage-uploader.h"
+#include "config.h"
 
 enum class StorageService {
     AWS_S3,
@@ -65,9 +66,6 @@ public:
     }
 
 private:
-    static constexpr size_t BUFFER_PROCESS_SIZE = 512 * 1024; // 512KB
-    static constexpr size_t MAX_BUFFER_SIZE = 3 * 1024 * 1024; // 3MB
-
     static std::once_flag initFlag_;
     static std::string uploadFolder_;
     static CryptoHelper cryptoHelper_;

@@ -5,6 +5,7 @@
 #include "s3-compatible-uploader.h"
 #include "wav-header.h"
 #include "string-utils.h"
+#include "config.h"
 
 constexpr int UPLOAD_TIMEOUT_SECONDS = 300; // 5 minutes timeout
 
@@ -19,7 +20,7 @@ S3CompatibleUploader::S3CompatibleUploader(const std::shared_ptr<Session>& sessi
     : StorageUploader(session), bucketName_(bucketName), region_(region), recordFileType_(ftype) {
     Aws::S3Crt::ClientConfiguration config;
     config.region = region;
-    config.maxConnections = getNumCpus() * 2;
+    config.maxConnections = Config::getInstance().getAwsMaxConnections();
     
     // Add connection settings
     config.connectTimeoutMs = 3000;  // 3 seconds
