@@ -1,4 +1,3 @@
-
 #include <regex>
 
 #include "session.h"
@@ -13,6 +12,11 @@ std::once_flag Session::initFlag_;
 std::string Session::uploadFolder_;
 CryptoHelper Session::cryptoHelper_ = CryptoHelper();
 
+// Static configuration variables (defaults will be overridden by main)
+size_t Session::bufferProcessSize_ = 512 * 1024;     // 512KB default
+size_t Session::maxBufferSize_ = 3 * 1024 * 1024;    // 3MB default
+int Session::awsMaxConnections_ = 8;                  // Default
+
 Session::Session() 
     : json_metadata_(nullptr), 
       storage_service_(StorageService::UNKNOWN),
@@ -24,10 +28,9 @@ Session::Session()
     // Create a logger with its own sink
     log_ = std::make_shared<spdlog::logger>("session_logger", sink);
 
-    buffer_.reserve(MAX_BUFFER_SIZE);
+    buffer_.reserve(maxBufferSize_);  // Use configurable max buffer size
     initialize();
 }
-
 
 Session::~Session() {  
   if (json_metadata_) {
@@ -49,8 +52,8 @@ void Session::addData(int isBinary, const char *data, size_t len) {
     {
         std::unique_lock<std::mutex> lock(mutex_);
 
-        // Check for overflow
-        if (buffer_.size() + len > MAX_BUFFER_SIZE) {
+        // Check for overflow using configurable max buffer size
+        if (buffer_.size() + len > maxBufferSize_) {
             log_->error("Buffer overflow: dropping data, buffer size is {}", buffer_.size());
             return;
         }
@@ -58,8 +61,8 @@ void Session::addData(int isBinary, const char *data, size_t len) {
         if (isBinary) {
             buffer_.insert(buffer_.end(), data, data + len);
 
-            // Process the buffer if it reaches the threshold
-            if (buffer_.size() >= BUFFER_PROCESS_SIZE) {
+            // Process the buffer if it reaches the configurable threshold
+            if (buffer_.size() >= bufferProcessSize_) {
                 should_process = true;
             }
         } 

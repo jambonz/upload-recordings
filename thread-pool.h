@@ -12,9 +12,9 @@
 
 class ThreadPool {
 public:
-    // Singleton pattern for global thread pool access
-    static ThreadPool& getInstance() {
-        static ThreadPool instance;
+    // Singleton pattern with configurable thread count
+    static ThreadPool& getInstance(int num_threads = 0) {
+        static ThreadPool instance(num_threads > 0 ? num_threads : std::thread::hardware_concurrency());
         return instance;
     }
 
@@ -62,8 +62,8 @@ public:
     }
 
 private:
-    // Private constructor (singleton)
-    ThreadPool(int num_threads = std::thread::hardware_concurrency())
+    // Private constructor (singleton) - now takes configurable thread count
+    ThreadPool(int num_threads)
         : io_context_(),
           work_guard_(boost::asio::make_work_guard(io_context_)),
           tasks_queued_(0),
