@@ -12,10 +12,10 @@
 #include <spdlog/sinks/stdout_sinks.h>
 #include <memory>
 
+#include "config.h"
 #include "thread-pool.h"
 #include "connection-manager.h"
 #include "string-utils.h"
-#include "config.h"
 
 extern const struct lws_protocols protocols[];
 
