@@ -19,7 +19,6 @@
 #include <aws/core/external/cjson/cJSON.h>
 
 #include "thread-pool.h"
-#include "mp3-encoder.h"
 #include "mysql-helper.h"
 #include "crypto-helper.h"
 #include "storage-uploader.h"
@@ -103,7 +102,6 @@ private:
     StorageService storage_service_;
     std::unique_ptr<StorageUploader> storageUploader_;
     std::unique_ptr<RecordCredentials> recordCredentials_;
-    std::unique_ptr<Mp3Encoder> mp3Encoder_;
 
     // Credentials for different storage services
     std::string bucket_name_;

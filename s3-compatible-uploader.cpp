@@ -4,6 +4,7 @@
 #include <cstdio>
 #include "s3-compatible-uploader.h"
 #include "wav-header.h"
+#include "streaming-mp3-encoder.h"
 #include "string-utils.h"
 #include "s3-client-manager.h"
 #include "session.h" 
@@ -156,9 +157,52 @@ void S3CompatibleUploader::finalizeUpload() {
             tempFile_.close();
         }
 
-        // if this is a WAV file, we need to prepend a wave header
+        // Handle different file types
         std::string finalFilePath = tempFilePath_;
-        if (recordFileType_ == RecordFileType::WAV) {
+        
+        if (recordFileType_ == RecordFileType::MP3) {
+            // For MP3, we need to encode the raw PCM data using streaming
+            log_->info("Encoding PCM data to MP3 format using streaming");
+            
+            // Create a unique temporary file for the MP3
+            char mp3TempFilePath[] = "/tmp/uploads/mp3file-XXXXXX";
+            int mp3TempFd = mkstemp(mp3TempFilePath);
+            if (mp3TempFd == -1) {
+                log_->error("Failed to create unique MP3 temporary file using mkstemp: {}", strerror(errno));
+                upload_failed_ = true;
+                cleanupTempFile();
+                return;
+            }
+            close(mp3TempFd); // Close the descriptor as we'll use the encoder's file methods
+            
+            try {
+                // Create streaming MP3 encoder with metadata parameters
+                // Using 2 channels and 128 kbps as before
+                StreamingMp3Encoder encoder(metadata_.sample_rate, 2, 128);
+                
+                // Get the size of the PCM file for logging
+                auto pcmFileSize = std::filesystem::file_size(tempFilePath_);
+                log_->info("Starting streaming MP3 encoding of {} bytes of PCM data", pcmFileSize);
+                
+                // Encode the file using streaming (reads and writes in chunks)
+                encoder.encodeFile(tempFilePath_, mp3TempFilePath);
+                
+                // Get the size of the resulting MP3 file
+                auto mp3FileSize = std::filesystem::file_size(mp3TempFilePath);
+                
+                // Update the final file path to point to the MP3 file
+                finalFilePath = mp3TempFilePath;
+                log_->info("Successfully encoded {} bytes of PCM to {} bytes of MP3", pcmFileSize, mp3FileSize);
+                
+            } catch (const std::exception& e) {
+                log_->error("MP3 encoding failed: {}", e.what());
+                std::remove(mp3TempFilePath);
+                upload_failed_ = true;
+                cleanupTempFile();
+                return;
+            }
+        }
+        else if (recordFileType_ == RecordFileType::WAV) {
             // Use mkstemp to generate a unique temporary file for the WAV file
             char wavTempFilePath[] = "/tmp/uploads/wavfile-XXXXXX"; // Template for unique file
             int wavTempFd = mkstemp(wavTempFilePath); // Creates the file and returns a file descriptor
@@ -273,7 +317,7 @@ void S3CompatibleUploader::finalizeUpload() {
                     }
                     
                     // Cleanup after upload completes
-                    if (recordFileType_ == RecordFileType::WAV) {
+                    if (recordFileType_ == RecordFileType::WAV || recordFileType_ == RecordFileType::MP3) {
                         std::remove(finalFilePathPtr->c_str());
                     }
                     cleanupTempFile();

@@ -96,3 +96,5 @@ tags
 # Ignore other temporary files
 *.cache
 *.d
+
+CLAUDE.md

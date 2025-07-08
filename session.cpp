@@ -158,8 +158,8 @@ void Session::processMetadata() {
 
             if (recordCredentials_->recordFormat == "mp3") {
                 recordFileType_ = RecordFileType::MP3;
-                mp3Encoder_ = std::make_unique<Mp3Encoder>(metadata_.sample_rate, 2, 128); // 128 kbps
-                log_->info("MP3 encoder created.");
+                // MP3 encoder will be created in the storage uploader at the end
+                log_->info("Recording format set to MP3 (encoding will happen at end).");
             }
             else {
                 recordFileType_ = RecordFileType::WAV;
@@ -211,9 +211,7 @@ void Session::processBuffer(bool isFinal) {
   if (process_buffer) {
       log_->info("Processing buffer of size: {}", localBuffer.size());
       
-      if (mp3Encoder_) {
-          mp3Encoder_->encodeInPlace(localBuffer);
-      }
+      // No longer encode MP3 here - just write raw PCM data
       
       if (storageUploader_) {
           if (!storageUploader_->upload(localBuffer, isFinal)) {
