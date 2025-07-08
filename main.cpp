@@ -176,7 +176,8 @@ int main(int argc, const char **argv) {
     
     Aws::SDKOptions options;
     try {
-        options.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Debug;
+        // Disable AWS SDK file logging to prevent log files in working directory
+        options.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Off;
         Aws::InitAPI(options);
 
         // Initialize the thread pool with parsed thread count

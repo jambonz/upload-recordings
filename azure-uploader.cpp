@@ -1,6 +1,7 @@
 #include "azure-uploader.h"
 #include "upload-utils.h"
-#include "wav-header.h"  
+#include "wav-header.h"
+#include "streaming-mp3-encoder.h"
 
 #include <iostream>
 #include <sstream>
@@ -120,8 +121,50 @@ bool AzureUploader::upload(std::vector<char>& data, bool isFinalChunk) {
     objectKey_ = createObjectPath(metadata_.call_sid,
                               recordFileType_ == RecordFileType::WAV ? "wav" : "mp3");
 
-    // If the file is WAV, create a new temporary file with the proper WAV header.
-    if (recordFileType_ == RecordFileType::WAV) {
+    // Handle different file types
+    if (recordFileType_ == RecordFileType::MP3) {
+      // For MP3, we need to encode the raw PCM data using streaming
+      log_->info("Encoding PCM data to MP3 format using streaming");
+      
+      // Create a unique temporary file for the MP3
+      char mp3TempFilePath[] = "/tmp/azure-mp3file-XXXXXX";
+      int mp3TempFd = mkstemp(mp3TempFilePath);
+      if (mp3TempFd == -1) {
+        log_->error("Failed to create unique MP3 temporary file: {}", std::strerror(errno));
+        upload_failed_ = true;
+        cleanupTempFile();
+        return false;
+      }
+      close(mp3TempFd); // Close the descriptor as we'll use the encoder's file methods
+      
+      try {
+        // Create streaming MP3 encoder with metadata parameters
+        // Using 2 channels and 128 kbps as before
+        StreamingMp3Encoder encoder(metadata_.sample_rate, 2, 128);
+        
+        // Get the size of the PCM file for logging
+        auto pcmFileSize = std::filesystem::file_size(tempFilePath_);
+        log_->info("Starting streaming MP3 encoding of {} bytes of PCM data", pcmFileSize);
+        
+        // Encode the file using streaming (reads and writes in chunks)
+        encoder.encodeFile(tempFilePath_, mp3TempFilePath);
+        
+        // Get the size of the resulting MP3 file
+        auto mp3FileSize = std::filesystem::file_size(mp3TempFilePath);
+        
+        // Update the final file path to point to the MP3 file
+        finalFilePath = mp3TempFilePath;
+        log_->info("Successfully encoded {} bytes of PCM to {} bytes of MP3", pcmFileSize, mp3FileSize);
+        
+      } catch (const std::exception& e) {
+        log_->error("MP3 encoding failed: {}", e.what());
+        std::remove(mp3TempFilePath);
+        upload_failed_ = true;
+        cleanupTempFile();
+        return false;
+      }
+    }
+    else if (recordFileType_ == RecordFileType::WAV) {
       char wavTempFilePath[] = "/tmp/azure-wavfile-XXXXXX";
       int wavTempFd = mkstemp(wavTempFilePath);
       if (wavTempFd == -1) {
@@ -190,8 +233,8 @@ bool AzureUploader::upload(std::vector<char>& data, bool isFinalChunk) {
     }
 
     log_->info("File uploaded successfully: {}", objectKey_);
-    // If we created a new WAV file, delete it.
-    if (recordFileType_ == RecordFileType::WAV) {
+    // If we created a new WAV or MP3 file, delete it.
+    if (recordFileType_ == RecordFileType::WAV || recordFileType_ == RecordFileType::MP3) {
       std::remove(finalFilePath.c_str());
     }
     // Clean up the buffering temp file.
