@@ -21,6 +21,14 @@ public:
         return instance;
     }
 
+    // Initialize statsd client - call this at application startup
+    static void initializeStatsd() {
+        if (auto* statsd = getStatsdClient()) {
+            // Send initial sessions count of zero
+            statsd->gauge("sessions.count", 0);
+        }
+    }
+
     // Safe statsd client access - returns nullptr if statsd is unavailable
     static StatsdClient* getStatsdClient() {
         static std::unique_ptr<StatsdClient> instance = createStatsdClient();
@@ -96,7 +104,16 @@ private:
     static std::unique_ptr<StatsdClient> createStatsdClient() {
         try {
             const char* prefix = std::getenv("JAMBONES_STATSD_PREFIX");
-            return std::make_unique<StatsdClient>("127.0.0.1", 8125, prefix ? prefix : "");
+            std::string prefixStr = prefix ? prefix : "";
+            auto client = std::make_unique<StatsdClient>("127.0.0.1", 8125, prefixStr);
+            
+            if (prefixStr.empty()) {
+                spdlog::info("Statsd client initialized successfully (host: 127.0.0.1:8125, no prefix)");
+            } else {
+                spdlog::info("Statsd client initialized successfully (host: 127.0.0.1:8125, prefix: {})", prefixStr);
+            }
+            
+            return client;
         } catch (const std::exception& e) {
             spdlog::warn("Failed to initialize statsd client: {}. Continuing without statsd.", e.what());
             return nullptr;

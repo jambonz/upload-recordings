@@ -186,6 +186,9 @@ int main(int argc, const char **argv) {
         // Initialize the connection manager
         auto& connectionManager = ConnectionManager::getInstance();
         
+        // Initialize statsd client at startup
+        ConnectionManager::initializeStatsd();
+        
         // Set global configuration values for Session class
         Session::setGlobalConfig(buffer_process_size, max_buffer_size, aws_max_connections);
 
