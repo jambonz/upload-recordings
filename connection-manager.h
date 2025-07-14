@@ -25,7 +25,7 @@ public:
     static void initializeStatsd() {
         if (auto* statsd = getStatsdClient()) {
             // Send initial sessions count of zero
-            statsd->gauge("sessions.count", 0);
+            statsd->gauge("recording.sessions.count", 0);
         }
     }
 
@@ -49,7 +49,7 @@ public:
                 
                 // Send session count to statsd
                 if (auto* statsd = getStatsdClient()) {
-                    statsd->gauge("sessions.count", sessions_.size());
+                    statsd->gauge("recording.sessions.count", sessions_.size());
                 }
             }
             
@@ -80,7 +80,7 @@ public:
             
             // Send session count to statsd
             if (auto* statsd = getStatsdClient()) {
-                statsd->gauge("sessions.count", sessions_.size());
+                statsd->gauge("recording.sessions.count", sessions_.size());
             }
         }
     }

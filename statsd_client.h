@@ -32,8 +32,9 @@ private:
     void send(const std::string& data) {
         if (socket_fd_ < 0) return;
         
-        sendto(socket_fd_, data.c_str(), data.length(), 0,
-               (struct sockaddr*)&server_addr_, sizeof(server_addr_));
+        // For TCP, send data with newline terminator (statsd over TCP typically expects this)
+        std::string message = data + "\n";
+        ::send(socket_fd_, message.c_str(), message.length(), 0);
     }
     
     std::string format_metric(const std::string& key, const std::string& value, 
@@ -72,7 +73,7 @@ public:
         }
 #endif
         
-        socket_fd_ = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        socket_fd_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (socket_fd_ < 0) {
             throw std::runtime_error("Failed to create socket");
         }
@@ -84,6 +85,12 @@ public:
         if (inet_pton(AF_INET, host_.c_str(), &server_addr_.sin_addr) <= 0) {
             close_socket();
             throw std::runtime_error("Invalid address: " + host_);
+        }
+        
+        // Connect to the server (this will fail if telegraf is not running)
+        if (connect(socket_fd_, (struct sockaddr*)&server_addr_, sizeof(server_addr_)) < 0) {
+            close_socket();
+            throw std::runtime_error("Failed to connect to statsd server at " + host_ + ":" + std::to_string(port_));
         }
     }
     
