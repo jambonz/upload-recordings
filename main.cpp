@@ -16,6 +16,7 @@
 #include "connection-manager.h"
 #include "string-utils.h"
 #include "s3-client-manager.h"
+#include "cloudwatch-client.h"
 
 extern const struct lws_protocols protocols[];
 
@@ -189,6 +190,9 @@ int main(int argc, const char **argv) {
         // Initialize statsd client at startup
         ConnectionManager::initializeStatsd();
         
+        // Initialize CloudWatch client at startup
+        ConnectionManager::initializeCloudWatch();
+        
         // Set global configuration values for Session class
         Session::setGlobalConfig(buffer_process_size, max_buffer_size, aws_max_connections);
 
@@ -251,6 +255,9 @@ int main(int argc, const char **argv) {
         // Shutdown thread pool
         threadPool.shutdown();
         S3ClientManager::getInstance().shutdown();
+        
+        // Shutdown CloudWatch client
+        CloudWatchClient::getInstance().stopMetricsPublishing();
     } catch (const std::exception &e) {
         std::cerr << "Exception: " << e.what() << std::endl;
     }

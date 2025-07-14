@@ -12,6 +12,7 @@
 #include <spdlog/spdlog.h>
 #include "session.h"
 #include "statsd_client.h"
+#include "cloudwatch-client.h"
 
 class ConnectionManager {
 public:
@@ -26,6 +27,22 @@ public:
         if (auto* statsd = getStatsdClient()) {
             // Send initial sessions count of zero
             statsd->gauge("recording.sessions.count", 0);
+        }
+    }
+
+    // Initialize CloudWatch client - call this at application startup
+    static void initializeCloudWatch() {
+        auto& cloudWatch = CloudWatchClient::getInstance();
+        cloudWatch.initialize();
+        
+        // Set callback to get session count
+        cloudWatch.setSessionCountCallback([]() -> size_t {
+            return ConnectionManager::getInstance().getSessionCount();
+        });
+        
+        // Start metrics publishing if CloudWatch is enabled
+        if (cloudWatch.isEnabled()) {
+            cloudWatch.startMetricsPublishing();
         }
     }
 
