@@ -7,6 +7,8 @@
 #include <chrono>
 #include <cstring>
 #include <stdexcept>
+#include <cerrno>
+#include <spdlog/spdlog.h>
 
 #ifdef _WIN32
     #include <winsock2.h>
@@ -32,9 +34,11 @@ private:
     void send(const std::string& data) {
         if (socket_fd_ < 0) return;
         
-        // For TCP, send data with newline terminator (statsd over TCP typically expects this)
-        std::string message = data + "\n";
-        ::send(socket_fd_, message.c_str(), message.length(), 0);
+        // For UDP, send data without newline terminator (standard statsd format)
+        spdlog::debug("Sending statsd metric: {}", data);
+        
+        sendto(socket_fd_, data.c_str(), data.length(), 0, 
+               (struct sockaddr*)&server_addr_, sizeof(server_addr_));
     }
     
     std::string format_metric(const std::string& key, const std::string& value, 
@@ -69,13 +73,16 @@ public:
 #ifdef _WIN32
         WSADATA wsa_data;
         if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
-            throw std::runtime_error("WSAStartup failed");
+            spdlog::error("WSAStartup failed");
+            return;
         }
 #endif
         
-        socket_fd_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        socket_fd_ = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
         if (socket_fd_ < 0) {
-            throw std::runtime_error("Failed to create socket");
+            spdlog::error("Failed to create UDP socket for statsd: {} (errno: {})", 
+                         strerror(errno), errno);
+            return;
         }
         
         memset(&server_addr_, 0, sizeof(server_addr_));
@@ -83,15 +90,12 @@ public:
         server_addr_.sin_port = htons(port_);
         
         if (inet_pton(AF_INET, host_.c_str(), &server_addr_.sin_addr) <= 0) {
+            spdlog::error("Invalid statsd address: {}", host_);
             close_socket();
-            throw std::runtime_error("Invalid address: " + host_);
+            return;
         }
         
-        // Connect to the server (this will fail if telegraf is not running)
-        if (connect(socket_fd_, (struct sockaddr*)&server_addr_, sizeof(server_addr_)) < 0) {
-            close_socket();
-            throw std::runtime_error("Failed to connect to statsd server at " + host_ + ":" + std::to_string(port_));
-        }
+        spdlog::info("Created UDP statsd client for {}:{}", host_, port_);
     }
     
     ~StatsdClient() {
@@ -185,6 +189,11 @@ public:
     // Create a timer that automatically sends timing data when destroyed
     Timer timer(const std::string& key, double sample_rate = 1.0) {
         return Timer(*this, key, sample_rate);
+    }
+    
+    // Check if the client is connected
+    bool isConnected() const {
+        return socket_fd_ >= 0;
     }
 };
 
