@@ -133,13 +133,6 @@ inline void CloudWatchClient::stopMetricsPublishing() {
 inline bool CloudWatchClient::isRunningOnEC2() {
     spdlog::debug("Checking if running on EC2...");
     
-    // Try to access EC2 instance metadata service
-    std::string tokenResponse = getInstanceMetadata("/latest/api/token");
-    if (tokenResponse.empty()) {
-        spdlog::debug("Failed to get IMDSv2 token");
-        return false;
-    }
-    
     // Get instance ID to confirm we're on EC2
     instanceId_ = getInstanceMetadata("/latest/meta-data/instance-id");
     if (instanceId_.empty()) {
