@@ -8,8 +8,10 @@
 #include <iostream>
 #include <sstream>
 #include <thread>
+#include <cstdlib>
 #include <spdlog/spdlog.h>
 #include "session.h"
+#include "statsd_client.h"
 
 class ConnectionManager {
 public:
@@ -17,6 +19,20 @@ public:
     static ConnectionManager& getInstance() {
         static ConnectionManager instance;
         return instance;
+    }
+
+    // Initialize statsd client - call this at application startup
+    static void initializeStatsd() {
+        if (auto* statsd = getStatsdClient()) {
+            // Send initial sessions count of zero
+            statsd->gauge("recording.sessions.count", 0);
+        }
+    }
+
+    // Safe statsd client access - returns nullptr if statsd is unavailable
+    static StatsdClient* getStatsdClient() {
+        static std::unique_ptr<StatsdClient> instance = createStatsdClient();
+        return instance.get();
     }
 
     // Create a new session for a connection
@@ -30,6 +46,11 @@ public:
                 sessions_[rawPtr] = session;
                 // Log the session count after creation
                 spdlog::info("session created - there are now {} active sessions", sessions_.size());
+                
+                // Send session count to statsd
+                if (auto* statsd = getStatsdClient()) {
+                    statsd->gauge("recording.sessions.count", sessions_.size());
+                }
             }
             
             return rawPtr;
@@ -55,7 +76,12 @@ public:
             session = it->second;
             
             sessions_.erase(it);
-            session->log("session destroyed - there are now {} active sessions", sessions_.size()); 
+            session->log("session destroyed - there are now {} active sessions", sessions_.size());
+            
+            // Send session count to statsd
+            if (auto* statsd = getStatsdClient()) {
+                statsd->gauge("recording.sessions.count", sessions_.size());
+            }
         }
     }
 
@@ -74,6 +100,25 @@ private:
     ConnectionManager& operator=(const ConnectionManager&) = delete;
     ConnectionManager(ConnectionManager&&) = delete;
     ConnectionManager& operator=(ConnectionManager&&) = delete;
+
+    static std::unique_ptr<StatsdClient> createStatsdClient() {
+        try {
+            const char* prefix = std::getenv("JAMBONES_STATSD_PREFIX");
+            std::string prefixStr = prefix ? prefix : "";
+            auto client = std::make_unique<StatsdClient>("127.0.0.1", 8125, prefixStr);
+            
+            if (prefixStr.empty()) {
+                spdlog::info("Statsd client initialized successfully (host: 127.0.0.1:8125, no prefix)");
+            } else {
+                spdlog::info("Statsd client initialized successfully (host: 127.0.0.1:8125, prefix: {})", prefixStr);
+            }
+            
+            return client;
+        } catch (const std::exception& e) {
+            spdlog::warn("Failed to initialize statsd client: {}. Continuing without statsd.", e.what());
+            return nullptr;
+        }
+    }
 
     std::unordered_map<void*, std::shared_ptr<Session>> sessions_;
     mutable std::mutex mutex_;
