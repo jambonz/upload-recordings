@@ -102,22 +102,21 @@ private:
     ConnectionManager& operator=(ConnectionManager&&) = delete;
 
     static std::unique_ptr<StatsdClient> createStatsdClient() {
-        try {
-            const char* prefix = std::getenv("JAMBONES_STATSD_PREFIX");
-            std::string prefixStr = prefix ? prefix : "";
-            auto client = std::make_unique<StatsdClient>("127.0.0.1", 8125, prefixStr);
-            
-            if (prefixStr.empty()) {
-                spdlog::info("Statsd client initialized successfully (host: 127.0.0.1:8125, no prefix)");
-            } else {
-                spdlog::info("Statsd client initialized successfully (host: 127.0.0.1:8125, prefix: {})", prefixStr);
-            }
-            
-            return client;
-        } catch (const std::exception& e) {
-            spdlog::warn("Failed to initialize statsd client: {}. Continuing without statsd.", e.what());
+        const char* prefix = std::getenv("JAMBONES_STATSD_PREFIX");
+        std::string prefixStr = prefix ? prefix : "";
+        
+        spdlog::info("Initializing UDP statsd client (host: 127.0.0.1:8125, prefix: {})", 
+                     prefixStr.empty() ? "none" : prefixStr);
+        
+        auto client = std::make_unique<StatsdClient>("127.0.0.1", 8125, prefixStr);
+        
+        // For UDP, we don't need to check connectivity - fire and forget
+        if (!client->isConnected()) {
+            spdlog::warn("Failed to create UDP socket for statsd. Metrics will not be sent.");
             return nullptr;
         }
+        
+        return client;
     }
 
     std::unordered_map<void*, std::shared_ptr<Session>> sessions_;
