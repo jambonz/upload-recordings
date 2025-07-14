@@ -34,9 +34,6 @@ private:
     void send(const std::string& data) {
         if (socket_fd_ < 0) return;
         
-        // For UDP, send data without newline terminator (standard statsd format)
-        spdlog::debug("Sending statsd metric: {}", data);
-        
         sendto(socket_fd_, data.c_str(), data.length(), 0, 
                (struct sockaddr*)&server_addr_, sizeof(server_addr_));
     }
