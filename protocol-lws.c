@@ -29,8 +29,7 @@ struct per_session_data__minimal {
         "audio.jambonz.org", \
         callback_minimal, \
         sizeof(struct per_session_data__minimal), \
-        128, \
-        0, NULL, 0 \
+        8192 \
     }
 
 /* HTTP callback for health check */

@@ -6,6 +6,8 @@
 #include <cstdlib>
 #include <atomic>
 
+#include <ev.h>  
+
 #include <aws/core/Aws.h>
 
 #include <spdlog/spdlog.h>
@@ -19,11 +21,13 @@
 #include "cloudwatch-client.h"
 
 extern const struct lws_protocols protocols[];
-
 static const lws_retry_bo_t retry = {
     .secs_since_valid_ping = 3,
     .secs_since_valid_hangup = 10,
 };
+static struct ev_loop *m_loop = nullptr;
+static struct ev_async *m_stop_watcher = nullptr;
+
 
 static std::atomic<bool> interrupted(false);
 
@@ -33,7 +37,11 @@ static lws_protocol_vhost_options pvo = { nullptr, nullptr, "lws-minimal", "" };
 #endif
 
 void sigint_handler(int sig) {
-    interrupted = true;
+  interrupted = true;
+  if (m_loop && m_stop_watcher) {
+    ev_async_send(m_loop, m_stop_watcher);
+  }
+
 }
 
 // Parse command-line arguments
@@ -109,6 +117,8 @@ void print_usage(const char* program_name) {
 int main(int argc, const char **argv) {
     lws_context_creation_info info;
     lws_context *context;
+    struct ev_loop *loop;
+    struct ev_async stop_watcher;
     const char *p;
     int n = 0;
 
@@ -160,7 +170,8 @@ int main(int argc, const char **argv) {
         else if (level_str == "error") level = spdlog::level::err;
     }
     spdlog::set_level(level);
-    
+    spdlog::info("Log level set to: {}", spdlog::level::to_string_view(spdlog::get_level()));
+
     // Parse configuration from command line
     int thread_count = parse_thread_count(argc, argv);
     int aws_max_connections = parse_aws_max_connections(argc, argv);
@@ -219,7 +230,8 @@ int main(int argc, const char **argv) {
     #if defined(LWS_WITH_PLUGINS)
         info.pvo = &pvo;
     #endif
-        info.options = LWS_SERVER_OPTION_HTTP_HEADERS_SECURITY_BEST_PRACTICES_ENFORCE;
+        info.options = LWS_SERVER_OPTION_HTTP_HEADERS_SECURITY_BEST_PRACTICES_ENFORCE |
+                        LWS_SERVER_OPTION_LIBEV;
 
     #if defined(LWS_WITH_TLS)
         if (lws_cmdline_option(argc, argv, "-s")) {
@@ -238,18 +250,42 @@ int main(int argc, const char **argv) {
             info.retry_and_idle_policy = &retry;
         }
 
+        // create our own libev loop
+        loop = ev_loop_new(EVFLAG_NOSIGMASK);
+        if (!loop) {
+          spdlog::info("Failed to create libev event loop");
+          return 1;
+        }
+
+        // provide our event loop to lws
+        void *foreign_loops[1] = { loop };
+        info.foreign_loops = foreign_loops;
+
         context = lws_create_context(&info);
         if (!context) {
-            lwsl_err("lws init failed\n");
+            spdlog::info("lws init failed\n");
+            ev_loop_destroy(loop);
             return 1;
         }
 
-        while (n >= 0 && !interrupted) {
-            n = lws_service(context, 5);
+        // SET UP ASYNC WATCHER FOR CLEAN SHUTDOWN
+        ev_async_init(&stop_watcher, [](EV_P_ ev_async *w, int revents) {
+          // Just waking up is enough - the while loop checks stopFlag
+        });
+        ev_async_start(loop, &stop_watcher);
+
+        // Store for shutdown from other threads
+        m_loop = loop;
+        m_stop_watcher = &stop_watcher;
+
+        spdlog::info("starting event loop...");
+        while (!interrupted) {
+            ev_run(loop, EVRUN_ONCE);
         }
 
-        spdlog::info("Shutting down server...");
+        spdlog::info("Shutting down server");
         lws_context_destroy(context);
+        ev_loop_destroy(loop);
         spdlog::info("LWS context destroyed");
                 
         // Shutdown thread pool

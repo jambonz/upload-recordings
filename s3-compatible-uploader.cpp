@@ -116,7 +116,7 @@ bool S3CompatibleUploader::upload(std::vector<char>& data, bool isFinalChunk) {
     }
     tempFile_.flush();
 
-    log_->info("S3CompatibleUploader uploaded {} bytes to temporary file {}.", data.size(), tempFilePath_);
+    log_->debug("S3CompatibleUploader uploaded {} bytes to temporary file {}.", data.size(), tempFilePath_);
 
     if (isFinalChunk) {
         finalizeUpload();
@@ -312,7 +312,7 @@ void S3CompatibleUploader::finalizeUpload() {
                         // Calculate upload duration
                         auto endTime = std::chrono::steady_clock::now();
                         auto duration = std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime).count();
-                        log_->info("File uploaded successfully: {} to {} (took {} seconds)", 
+                        log_->debug("File uploaded successfully: {} to {} (took {} seconds)", 
                             tempFilePath_, objectKey_, duration);
                     }
                     

@@ -36,6 +36,7 @@ upload_recordings_LDADD = $(LIBWEBSOCKETS_LIBS) \
   -laws-cpp-sdk-core \
   -laws-cpp-sdk-monitoring \
   -lspdlog \
+  -lev \
   -lfmt \
   -lcurl \
   -lssl \

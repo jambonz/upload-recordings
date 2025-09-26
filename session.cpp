@@ -209,7 +209,7 @@ void Session::processBuffer(bool isFinal) {
   
   // Process the buffer if we have data
   if (process_buffer) {
-      log_->info("Processing buffer of size: {}", localBuffer.size());
+      log_->debug("Processing buffer of size: {}", localBuffer.size());
       
       // No longer encode MP3 here - just write raw PCM data
       
