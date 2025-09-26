@@ -47,7 +47,7 @@ void StorageUploader::cleanupTempFile() {
 
     // now the session can be destroyed
     if (auto session = sessionRef_.lock()) {
-      log_->info("StorageUploader::cleanupTempFile - destroying session");
+      log_->debug("StorageUploader::cleanupTempFile - destroying session");
       ConnectionManager::getInstance().destroySession(session.get());
     }
     else {
