@@ -7,11 +7,13 @@
 #include <cstring>
 #include <fstream>
 #include <memory>
+#include <spdlog/spdlog.h>
 
 class StreamingMp3Encoder {
 public:
-    StreamingMp3Encoder(int sampleRate, int numChannels, int bitrate)
-      : sampleRate_(sampleRate), numChannels_(numChannels), bitrate_(bitrate) {
+    StreamingMp3Encoder(int sampleRate, int numChannels, int bitrate,
+                        std::shared_ptr<spdlog::logger> log)
+      : sampleRate_(sampleRate), numChannels_(numChannels), bitrate_(bitrate), log_(log) {
       lame_ = lame_init();
       if (!lame_) {
         throw std::runtime_error("Failed to initialize LAME encoder.");
@@ -111,6 +113,9 @@ public:
             // If at end of file, truncate incomplete samples instead of trying to read more
             if (inputFile.eof()) {
               // Truncate the incomplete sample at the end
+              if (log_) {
+                log_->info("Truncating {} incomplete bytes at end of PCM file", remainder);
+              }
               pcmBuffer.resize(bytesRead - remainder);
             } else {
               // Not at EOF - try to read additional bytes to complete the last sample
@@ -153,10 +158,11 @@ private:
     int numChannels_;
     int bitrate_;
     size_t mp3BufferSize_;
-    
+    std::shared_ptr<spdlog::logger> log_;
+
     // Use 1MB chunks for streaming (must be multiple of sample size)
     static constexpr size_t chunkSize_ = 1024 * 1024;
-    
+
     std::vector<unsigned char> mp3Buffer_; // Reusable MP3 buffer
 };
 
