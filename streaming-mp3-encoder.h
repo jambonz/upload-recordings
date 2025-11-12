@@ -95,34 +95,43 @@ public:
 
       // Process in chunks
       std::vector<char> pcmBuffer(chunkSize_);
-      
+
       while (inputFile.good()) {
         inputFile.read(pcmBuffer.data(), chunkSize_);
         std::streamsize bytesRead = inputFile.gcount();
-        
+
         if (bytesRead > 0) {
           // Resize buffer to actual bytes read
           pcmBuffer.resize(bytesRead);
-          
+
           // Ensure we have complete samples (multiple of sample size * channels)
           size_t sampleSize = sizeof(short) * numChannels_;
           size_t remainder = bytesRead % sampleSize;
           if (remainder != 0) {
-            // Read additional bytes to complete the last sample
-            std::vector<char> extraBytes(sampleSize - remainder);
-            inputFile.read(extraBytes.data(), extraBytes.size());
-            size_t extraBytesRead = inputFile.gcount();
-            pcmBuffer.insert(pcmBuffer.end(), extraBytes.begin(), extraBytes.begin() + extraBytesRead);
+            // If at end of file, truncate incomplete samples instead of trying to read more
+            if (inputFile.eof()) {
+              // Truncate the incomplete sample at the end
+              pcmBuffer.resize(bytesRead - remainder);
+            } else {
+              // Not at EOF - try to read additional bytes to complete the last sample
+              std::vector<char> extraBytes(sampleSize - remainder);
+              inputFile.read(extraBytes.data(), extraBytes.size());
+              size_t extraBytesRead = inputFile.gcount();
+              pcmBuffer.insert(pcmBuffer.end(), extraBytes.begin(), extraBytes.begin() + extraBytesRead);
+            }
           }
-          
-          // Encode the chunk
-          auto mp3Data = encodeChunk(pcmBuffer);
-          
-          // Write to output
-          if (!mp3Data.empty()) {
-            outputFile.write(reinterpret_cast<const char*>(mp3Data.data()), mp3Data.size());
+
+          // Only encode if we have data after alignment
+          if (!pcmBuffer.empty()) {
+            // Encode the chunk
+            auto mp3Data = encodeChunk(pcmBuffer);
+
+            // Write to output
+            if (!mp3Data.empty()) {
+              outputFile.write(reinterpret_cast<const char*>(mp3Data.data()), mp3Data.size());
+            }
           }
-          
+
           // Resize buffer back to chunk size for next iteration
           pcmBuffer.resize(chunkSize_);
         }
