@@ -180,29 +180,36 @@ void Session::processMetadata() {
 void Session::processBuffer(bool isFinal) {
   std::vector<char> localBuffer;
   bool process_buffer = false;
-  
+
   {
       std::unique_lock<std::mutex> lock(mutex_);
-      
+
       if (!buffer_.empty()) {
           std::swap(localBuffer, buffer_);
-          
+
           // Handle misalignment in the swapped buffer
           size_t numSamples = localBuffer.size() / sizeof(short); // Total samples in localBuffer
           size_t remainder = numSamples % 2;    // Do we have the same num samples for both channels?
 
           if (remainder != 0) {
               log_->info("Misaligned buffer: {} samples", numSamples);
-              // Calculate the size of the trailing odd sample (in bytes)
-              size_t leftoverSize = remainder * sizeof(short);
 
-              // Move the trailing sample(s) back to the now-empty buffer_
-              buffer_.insert(buffer_.end(), localBuffer.end() - leftoverSize, localBuffer.end());
+              // Only move leftover samples back to buffer_ if this is NOT the final chunk
+              // If it's the final chunk, we need to upload all remaining data
+              if (!isFinal) {
+                  // Calculate the size of the trailing odd sample (in bytes)
+                  size_t leftoverSize = remainder * sizeof(short);
 
-              // Remove the trailing sample(s) from localBuffer
-              localBuffer.resize(localBuffer.size() - leftoverSize);
+                  // Move the trailing sample(s) back to the now-empty buffer_
+                  buffer_.insert(buffer_.end(), localBuffer.end() - leftoverSize, localBuffer.end());
+
+                  // Remove the trailing sample(s) from localBuffer
+                  localBuffer.resize(localBuffer.size() - leftoverSize);
+              } else {
+                  log_->info("Final chunk: including all {} samples in upload", numSamples);
+              }
           }
-          
+
           process_buffer = true;
       }
   }

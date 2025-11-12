@@ -198,7 +198,7 @@ void GoogleUploader::finalizeUpload() {
     try {
       // Create streaming MP3 encoder with metadata parameters
       // Using 2 channels and 128 kbps as before
-      StreamingMp3Encoder encoder(metadata_.sample_rate, 2, 128);
+      StreamingMp3Encoder encoder(metadata_.sample_rate, 2, 128, log_);
       
       // Get the size of the PCM file for logging
       auto pcmFileSize = std::filesystem::file_size(tempFilePath_);

@@ -7,11 +7,13 @@
 #include <cstring>
 #include <fstream>
 #include <memory>
+#include <spdlog/spdlog.h>
 
 class StreamingMp3Encoder {
 public:
-    StreamingMp3Encoder(int sampleRate, int numChannels, int bitrate)
-      : sampleRate_(sampleRate), numChannels_(numChannels), bitrate_(bitrate) {
+    StreamingMp3Encoder(int sampleRate, int numChannels, int bitrate,
+                        std::shared_ptr<spdlog::logger> log)
+      : sampleRate_(sampleRate), numChannels_(numChannels), bitrate_(bitrate), log_(log) {
       lame_ = lame_init();
       if (!lame_) {
         throw std::runtime_error("Failed to initialize LAME encoder.");
@@ -95,34 +97,46 @@ public:
 
       // Process in chunks
       std::vector<char> pcmBuffer(chunkSize_);
-      
+
       while (inputFile.good()) {
         inputFile.read(pcmBuffer.data(), chunkSize_);
         std::streamsize bytesRead = inputFile.gcount();
-        
+
         if (bytesRead > 0) {
           // Resize buffer to actual bytes read
           pcmBuffer.resize(bytesRead);
-          
+
           // Ensure we have complete samples (multiple of sample size * channels)
           size_t sampleSize = sizeof(short) * numChannels_;
           size_t remainder = bytesRead % sampleSize;
           if (remainder != 0) {
-            // Read additional bytes to complete the last sample
-            std::vector<char> extraBytes(sampleSize - remainder);
-            inputFile.read(extraBytes.data(), extraBytes.size());
-            size_t extraBytesRead = inputFile.gcount();
-            pcmBuffer.insert(pcmBuffer.end(), extraBytes.begin(), extraBytes.begin() + extraBytesRead);
+            // If at end of file, truncate incomplete samples instead of trying to read more
+            if (inputFile.eof()) {
+              // Truncate the incomplete sample at the end
+              if (log_) {
+                log_->info("Truncating {} incomplete bytes at end of PCM file", remainder);
+              }
+              pcmBuffer.resize(bytesRead - remainder);
+            } else {
+              // Not at EOF - try to read additional bytes to complete the last sample
+              std::vector<char> extraBytes(sampleSize - remainder);
+              inputFile.read(extraBytes.data(), extraBytes.size());
+              size_t extraBytesRead = inputFile.gcount();
+              pcmBuffer.insert(pcmBuffer.end(), extraBytes.begin(), extraBytes.begin() + extraBytesRead);
+            }
           }
-          
-          // Encode the chunk
-          auto mp3Data = encodeChunk(pcmBuffer);
-          
-          // Write to output
-          if (!mp3Data.empty()) {
-            outputFile.write(reinterpret_cast<const char*>(mp3Data.data()), mp3Data.size());
+
+          // Only encode if we have data after alignment
+          if (!pcmBuffer.empty()) {
+            // Encode the chunk
+            auto mp3Data = encodeChunk(pcmBuffer);
+
+            // Write to output
+            if (!mp3Data.empty()) {
+              outputFile.write(reinterpret_cast<const char*>(mp3Data.data()), mp3Data.size());
+            }
           }
-          
+
           // Resize buffer back to chunk size for next iteration
           pcmBuffer.resize(chunkSize_);
         }
@@ -144,10 +158,11 @@ private:
     int numChannels_;
     int bitrate_;
     size_t mp3BufferSize_;
-    
+    std::shared_ptr<spdlog::logger> log_;
+
     // Use 1MB chunks for streaming (must be multiple of sample size)
     static constexpr size_t chunkSize_ = 1024 * 1024;
-    
+
     std::vector<unsigned char> mp3Buffer_; // Reusable MP3 buffer
 };
 
