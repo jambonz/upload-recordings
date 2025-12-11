@@ -72,7 +72,7 @@ S3CompatibleUploader::S3CompatibleUploader(const std::shared_ptr<Session>& sessi
         
         config.useVirtualAddressing = useVirtualAddressing;
         
-        log_->info("Creating S3 compatible uploader for bucket:{}, endpoint {}, max connections: {}", 
+        log_->info("Creating S3 compatible uploader for bucket:{}, endpoint:{}, max connections:{}", 
                    bucketName, endpoint, config.maxConnections);
     } else {
         log_->info("Creating S3 uploader for bucket: {} in region {}, max connections: {}", 
@@ -312,7 +312,7 @@ void S3CompatibleUploader::finalizeUpload() {
                         // Calculate upload duration
                         auto endTime = std::chrono::steady_clock::now();
                         auto duration = std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime).count();
-                        log_->debug("File uploaded successfully: {} to {} (took {} seconds)", 
+                        log_->info("File uploaded successfully: {} to {} (took {} seconds)", 
                             tempFilePath_, objectKey_, duration);
                     }
                     

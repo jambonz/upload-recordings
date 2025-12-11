@@ -232,7 +232,7 @@ bool AzureUploader::upload(std::vector<char>& data, bool isFinalChunk) {
       return false;
     }
 
-    log_->debug("File uploaded successfully: {}", objectKey_);
+    log_->info("File uploaded successfully to Azure: {}", objectKey_);
     // If we created a new WAV or MP3 file, delete it.
     if (recordFileType_ == RecordFileType::WAV || recordFileType_ == RecordFileType::MP3) {
       std::remove(finalFilePath.c_str());

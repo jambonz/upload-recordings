@@ -1,5 +1,29 @@
 // s3-client-manager.cpp
 #include "s3-client-manager.h"
+#include <cstdlib>
+#include <sstream>
+#include <algorithm>
+
+// Static member initialization
+std::vector<std::string> S3ClientManager::pathStyleServices_;
+
+void S3ClientManager::initPathStyleServices() {
+    const char* envValue = std::getenv("S3_PATH_STYLE_SERVICES");
+    if (envValue != nullptr && envValue[0] != '\0') {
+        std::string services(envValue);
+        std::stringstream ss(services);
+        std::string service;
+        while (std::getline(ss, service, ',')) {
+            // Trim whitespace
+            service.erase(0, service.find_first_not_of(" \t"));
+            service.erase(service.find_last_not_of(" \t") + 1);
+            if (!service.empty()) {
+                pathStyleServices_.push_back(service);
+                spdlog::info("S3ClientManager: Added '{}' to path-style services list", service);
+            }
+        }
+    }
+}
 
 std::shared_ptr<Aws::S3Crt::S3CrtClient> S3ClientManager::getClient(
     const Aws::Auth::AWSCredentials& credentials,
@@ -88,14 +112,24 @@ Aws::S3Crt::ClientConfiguration S3ClientManager::createConfig(
         
         // Determine virtual addressing based on endpoint
         bool useVirtualAddressing = true;
-        
-        // Known services that don't use virtual addressing
-        if (endpoint.find("minio") != std::string::npos || 
-            endpoint.find("localhost") != std::string::npos ||
+
+        // Always use path-style for localhost
+        if (endpoint.find("localhost") != std::string::npos ||
             endpoint.find("127.0.0.1") != std::string::npos) {
             useVirtualAddressing = false;
         }
-        
+
+        // Check against user-configured path-style services (from S3_PATH_STYLE_SERVICES env var)
+        if (useVirtualAddressing) {
+            for (const auto& service : pathStyleServices_) {
+                if (endpoint.find(service) != std::string::npos) {
+                    useVirtualAddressing = false;
+                    spdlog::info("Using path-style addressing for endpoint '{}' (matched '{}')", endpoint, service);
+                    break;
+                }
+            }
+        }
+
         config.useVirtualAddressing = useVirtualAddressing;
     }
 

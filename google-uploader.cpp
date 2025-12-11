@@ -286,7 +286,7 @@ void GoogleUploader::finalizeUpload() {
     log_->error("Failed to upload file in chunks: {}", finalFilePath);
     upload_failed_ = true;
   } else {
-    log_->debug("File uploaded successfully: {} to {}", finalFilePath, objectKey_);
+    log_->info("File uploaded successfully to Google Cloud Storage: {}", objectKey_);
   }
 
   // If we created a new WAV or MP3 file, delete it.
