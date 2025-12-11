@@ -8,6 +8,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <string>
+#include <vector>
 #include <spdlog/spdlog.h>
 
 class S3ClientManager {
@@ -33,9 +34,15 @@ public:
     // Shutdown all clients (called during app shutdown)
     void shutdown();
 
+    // Initialize path-style services from environment variable
+    static void initPathStyleServices();
+
 private:
-    S3ClientManager() = default;
+    S3ClientManager() { initPathStyleServices(); }
     ~S3ClientManager() { shutdown(); }
+
+    // List of services that require path-style addressing (from S3_PATH_STYLE_SERVICES env var)
+    static std::vector<std::string> pathStyleServices_;
     
     // Deleted copy/move constructors
     S3ClientManager(const S3ClientManager&) = delete;
