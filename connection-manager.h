@@ -121,11 +121,17 @@ private:
     static std::unique_ptr<StatsdClient> createStatsdClient() {
         const char* prefix = std::getenv("JAMBONES_STATSD_PREFIX");
         std::string prefixStr = prefix ? prefix : "";
-        
-        spdlog::info("Initializing UDP statsd client (host: 127.0.0.1:8125, prefix: {})", 
-                     prefixStr.empty() ? "none" : prefixStr);
-        
-        auto client = std::make_unique<StatsdClient>("127.0.0.1", 8125, prefixStr);
+
+        const char* hostEnv = std::getenv("STATS_HOST");
+        std::string host = hostEnv ? hostEnv : "127.0.0.1";
+
+        const char* portEnv = std::getenv("STATS_PORT");
+        int port = portEnv ? std::atoi(portEnv) : 8125;
+
+        spdlog::info("Initializing UDP statsd client (host: {}:{}, prefix: {})",
+                     host, port, prefixStr.empty() ? "none" : prefixStr);
+
+        auto client = std::make_unique<StatsdClient>(host, port, prefixStr);
         
         // For UDP, we don't need to check connectivity - fire and forget
         if (!client->isConnected()) {
