@@ -128,17 +128,20 @@ private:
         const char* portEnv = std::getenv("STATS_PORT");
         int port = portEnv ? std::atoi(portEnv) : 8125;
 
-        spdlog::info("Initializing UDP statsd client (host: {}:{}, prefix: {})",
-                     host, port, prefixStr.empty() ? "none" : prefixStr);
+        const char* protoEnv = std::getenv("STATS_PROTOCOL");
+        bool useTcp = protoEnv && std::string(protoEnv) == "tcp";
 
-        auto client = std::make_unique<StatsdClient>(host, port, prefixStr);
-        
-        // For UDP, we don't need to check connectivity - fire and forget
+        spdlog::info("Initializing {} statsd client (host: {}:{}, prefix: {})",
+                     useTcp ? "TCP" : "UDP", host, port,
+                     prefixStr.empty() ? "none" : prefixStr);
+
+        auto client = std::make_unique<StatsdClient>(host, port, prefixStr, useTcp);
+
         if (!client->isConnected()) {
-            spdlog::warn("Failed to create UDP socket for statsd. Metrics will not be sent.");
+            spdlog::warn("Failed to create statsd client. Metrics will not be sent.");
             return nullptr;
         }
-        
+
         return client;
     }
 
