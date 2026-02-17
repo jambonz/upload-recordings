@@ -18,6 +18,7 @@
     #include <sys/socket.h>
     #include <netinet/in.h>
     #include <arpa/inet.h>
+    #include <netdb.h>
     #include <unistd.h>
 #endif
 
@@ -85,12 +86,22 @@ public:
         memset(&server_addr_, 0, sizeof(server_addr_));
         server_addr_.sin_family = AF_INET;
         server_addr_.sin_port = htons(port_);
-        
-        if (inet_pton(AF_INET, host_.c_str(), &server_addr_.sin_addr) <= 0) {
-            spdlog::error("Invalid statsd address: {}", host_);
+
+        // Use getaddrinfo to support both hostnames and IP addresses
+        struct addrinfo hints, *res;
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_DGRAM;
+
+        int rc = getaddrinfo(host_.c_str(), nullptr, &hints, &res);
+        if (rc != 0) {
+            spdlog::error("Failed to resolve statsd address '{}': {}", host_, gai_strerror(rc));
             close_socket();
             return;
         }
+
+        server_addr_.sin_addr = ((struct sockaddr_in*)res->ai_addr)->sin_addr;
+        freeaddrinfo(res);
         
         spdlog::info("Created UDP statsd client for {}:{}", host_, port_);
     }
