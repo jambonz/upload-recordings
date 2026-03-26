@@ -49,5 +49,8 @@ override_dh_auto_clean:
 	rm -rf build
 	rm -rf $(DEPS_DIR)
 
+override_dh_shlibdeps:
+	dh_shlibdeps --dpkg-shlibdeps-params=--ignore-missing-info
+
 override_dh_auto_test:
 	# Skip tests during package build
