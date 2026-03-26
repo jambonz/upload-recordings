@@ -5,6 +5,7 @@
 #include <unordered_set>
 #include <mutex>
 #include <memory>
+#include <atomic>
 #include <iostream>
 #include <sstream>
 #include <thread>
@@ -53,16 +54,17 @@ public:
     }
 
     // Create a new session for a connection
-    void* createSession(const std::string& peerAddress) {
+    void* createSession() {
         try {
-            auto session = std::make_shared<Session>(peerAddress);
+            std::string sessionId = std::to_string(nextSessionId_.fetch_add(1, std::memory_order_relaxed));
+            auto session = std::make_shared<Session>(sessionId);
             void* rawPtr = session.get();
 
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 sessions_[rawPtr] = session;
                 // Log the session count after creation
-                spdlog::info("session created from {} - there are now {} active sessions", peerAddress, sessions_.size());
+                spdlog::info("session {} created - there are now {} active sessions", sessionId, sessions_.size());
                 
                 // Send session count to statsd
                 if (auto* statsd = getStatsdClient()) {
@@ -147,6 +149,7 @@ private:
 
     std::unordered_map<void*, std::shared_ptr<Session>> sessions_;
     mutable std::mutex mutex_;
+    std::atomic<uint64_t> nextSessionId_{1};
 };
 
 #endif // CONNECTION_MANAGER_H

@@ -17,18 +17,18 @@ size_t Session::bufferProcessSize_ = 512 * 1024;     // 512KB default
 size_t Session::maxBufferSize_ = 3 * 1024 * 1024;    // 3MB default
 int Session::awsMaxConnections_ = 8;                  // Default
 
-Session::Session(const std::string& peerAddress)
+Session::Session(const std::string& sessionId)
     : json_metadata_(nullptr),
       storage_service_(StorageService::UNKNOWN),
       strand_(ThreadPool::getInstance().createStrand()),
-      peer_address_(peerAddress) {
+      session_id_(sessionId) {
 
     // Create a unique sink for this session
     auto sink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
 
     // Create a logger with its own sink
     log_ = std::make_shared<spdlog::logger>("session_logger", sink);
-    log_->set_pattern(fmt::format("(peer: {}) %v", peer_address_));
+    log_->set_pattern(fmt::format("(session: {}) %v", session_id_));
 
     buffer_.reserve(maxBufferSize_);  // Use configurable max buffer size
     initialize();
@@ -44,7 +44,7 @@ void Session::setContext(const std::string& account_sid, const std::string& call
     account_sid_ = account_sid;
     call_sid_ = call_sid;
 
-    log_->set_pattern(fmt::format("(peer: {}, account_sid: {}, call_sid: {}) %v", peer_address_, account_sid_, call_sid_));
+    log_->set_pattern(fmt::format("(session: {}, account_sid: {}, call_sid: {}) %v", session_id_, account_sid_, call_sid_));
     log_->info("Received metadata");
 }
 

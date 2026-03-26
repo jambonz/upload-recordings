@@ -1,5 +1,5 @@
 # Initialize Autoconf
-AC_INIT([upload_recordings], [1.0], [youremail@example.com])
+AC_INIT([upload_recordings], [1.0], [support@jambonz.org])
 AC_PREREQ([2.69])
 
 # Define required macros
