@@ -88,7 +88,7 @@ autoreconf -fi
 mkdir build
 cd build
 PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH \
-    ../configure CPPFLAGS='-DNDEBUG' --enable-tcmalloc=yes CXXFLAGS='-g -O2'
+    ../configure CPPFLAGS='-DNDEBUG -DSPDLOG_FMT_EXTERNAL' --enable-tcmalloc=yes CXXFLAGS='-g -O2'
 %__make
 
 %pre
