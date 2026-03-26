@@ -9,6 +9,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <filesystem>
 
 #include <boost/asio.hpp>
 #include <boost/enable_shared_from_this.hpp>
@@ -43,7 +44,7 @@ public:
             uploadFolder_ = tempFolderEnv ? tempFolderEnv : "/tmp/uploads";
 
             // Ensure the folder exists
-            std::system(("mkdir -p " + uploadFolder_).c_str());
+            std::filesystem::create_directories(uploadFolder_);
         });
     }
 
