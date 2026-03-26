@@ -1,22 +1,24 @@
 #!/usr/bin/make -f
 
 export DH_VERBOSE = 1
+DEPS_DIR = $(CURDIR)/deps-build
 
 %:
 	dh $@
 
 override_dh_auto_configure:
+	mkdir -p $(DEPS_DIR)
 	# Build libwebsockets v4.3.3 from source with libev support
-	cd /usr/local/src && \
+	cd $(DEPS_DIR) && \
 		git clone https://github.com/warmcat/libwebsockets.git -b v4.3.3 --depth 1 && \
 		cd libwebsockets/lib/roles/ws && \
 		patch ops-ws.c < $(CURDIR)/ops-ws.c.patch && \
-		cd /usr/local/src/libwebsockets && \
+		cd $(DEPS_DIR)/libwebsockets && \
 		mkdir -p build && cd build && \
 		cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLWS_WITH_NETLINK=OFF -DLWS_WITH_LIBEV=1 && \
-		$(MAKE) && make install
+		$(MAKE) && sudo make install
 	# Build AWS SDK C++ v1.11.500 from source
-	cd /usr/local/src && \
+	cd $(DEPS_DIR) && \
 		git clone https://github.com/aws/aws-sdk-cpp -b 1.11.500 --depth 1 && \
 		cd aws-sdk-cpp && \
 		git submodule update --init --recursive && \
@@ -27,9 +29,9 @@ override_dh_auto_configure:
 			-DENABLE_TESTING=OFF \
 			-DAUTORUN_UNIT_TESTS=OFF \
 			-DCMAKE_CXX_FLAGS="-Wno-unused-parameter -Wno-error=nonnull -Wno-error=deprecated-declarations -Wno-error=uninitialized -Wno-error=maybe-uninitialized -Wno-error=array-bounds" && \
-		$(MAKE) && make install && \
-		find /usr/local/src/aws-sdk-cpp/ -type f -name "*.pc" -exec cp -t /usr/local/lib/pkgconfig/ {} +
-	ldconfig
+		$(MAKE) && sudo make install
+	sudo find $(DEPS_DIR)/aws-sdk-cpp/ -type f -name "*.pc" -exec cp -t /usr/local/lib/pkgconfig/ {} +
+	sudo ldconfig
 	# Configure upload-recordings
 	autoreconf -fi
 	mkdir -p build
@@ -45,8 +47,7 @@ override_dh_auto_install:
 
 override_dh_auto_clean:
 	rm -rf build
-	rm -rf /usr/local/src/libwebsockets
-	rm -rf /usr/local/src/aws-sdk-cpp
+	rm -rf $(DEPS_DIR)
 
 override_dh_auto_test:
 	# Skip tests during package build
