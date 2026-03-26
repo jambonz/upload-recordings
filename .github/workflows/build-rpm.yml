@@ -1,0 +1,90 @@
+name: Build RPM Package
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-rpm:
+    runs-on: ubuntu-22.04
+    container:
+      image: rockylinux:9
+
+    steps:
+      - name: Install git and build tools
+        run: |
+          dnf install -y dnf-plugins-core epel-release
+          dnf config-manager --set-enabled crb
+          # Install MySQL Community repo for mysql-connector-c++
+          dnf install -y https://dev.mysql.com/get/mysql84-community-release-el9-1.noarch.rpm || true
+          dnf config-manager --enable mysql-connectors-community
+          dnf install -y \
+            git \
+            gcc \
+            gcc-c++ \
+            cmake \
+            rpm-build \
+            redhat-rpm-config \
+            autoconf \
+            automake \
+            pkg-config \
+            openssl-devel \
+            boost-devel \
+            libcurl-devel \
+            gperftools-devel \
+            libev-devel \
+            cjson-devel \
+            lame-devel \
+            spdlog-devel \
+            fmt-devel \
+            mysql-connector-c++-devel
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version from git
+        id: version
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          VERSION=$(git describe --tags --always 2>/dev/null || echo "0.0.1")
+          # Remove leading 'v' if present
+          VERSION=${VERSION#v}
+          # Replace hyphens with dots for RPM compatibility
+          VERSION=$(echo "$VERSION" | tr '-' '.')
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Building version: ${VERSION}"
+
+      - name: Update spec file version
+        run: |
+          sed -i "s/^Version:.*/Version: ${{ steps.version.outputs.VERSION }}/" el/upload-recordings.spec
+
+      - name: Create source tarball
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          cd ..
+          tar --transform "s,^$(basename $GITHUB_WORKSPACE),upload-recordings," -czvf "upload-recordings-${VERSION}.tar.gz" "$(basename $GITHUB_WORKSPACE)/"
+          mv "upload-recordings-${VERSION}.tar.gz" "$GITHUB_WORKSPACE/"
+
+      - name: Build RPM
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          cp "upload-recordings-${VERSION}.tar.gz" ~/rpmbuild/SOURCES/
+          rpmbuild -ta "upload-recordings-${VERSION}.tar.gz"
+
+      - name: Prepare artifacts
+        run: |
+          cp ~/rpmbuild/RPMS/x86_64/upload-recordings*.rpm .
+          ls -la upload-recordings*.rpm
+
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: upload-recordings-*.rpm
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -17,16 +17,18 @@ size_t Session::bufferProcessSize_ = 512 * 1024;     // 512KB default
 size_t Session::maxBufferSize_ = 3 * 1024 * 1024;    // 3MB default
 int Session::awsMaxConnections_ = 8;                  // Default
 
-Session::Session() 
-    : json_metadata_(nullptr), 
+Session::Session(const std::string& sessionId)
+    : json_metadata_(nullptr),
       storage_service_(StorageService::UNKNOWN),
-      strand_(ThreadPool::getInstance().createStrand()) {
+      strand_(ThreadPool::getInstance().createStrand()),
+      session_id_(sessionId) {
 
     // Create a unique sink for this session
     auto sink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
-    
+
     // Create a logger with its own sink
     log_ = std::make_shared<spdlog::logger>("session_logger", sink);
+    log_->set_pattern(fmt::format("(session: {}) %v", session_id_));
 
     buffer_.reserve(maxBufferSize_);  // Use configurable max buffer size
     initialize();
@@ -42,7 +44,7 @@ void Session::setContext(const std::string& account_sid, const std::string& call
     account_sid_ = account_sid;
     call_sid_ = call_sid;
 
-    log_->set_pattern(fmt::format("(account_sid: {}, call_sid: {}) %v", account_sid_, call_sid_));
+    log_->set_pattern(fmt::format("(session: {}, account_sid: {}, call_sid: {}) %v", session_id_, account_sid_, call_sid_));
     log_->info("Received metadata");
 }
 
@@ -217,14 +219,17 @@ void Session::processBuffer(bool isFinal) {
   // Process the buffer if we have data
   if (process_buffer) {
       log_->debug("Processing buffer of size: {}", localBuffer.size());
-      
-      // No longer encode MP3 here - just write raw PCM data
-      
+
       if (storageUploader_) {
           if (!storageUploader_->upload(localBuffer, isFinal)) {
               log_->error("Upload failed.");
-              //TODO: handle error somehow? End session??
           }
+      }
+      else if (isFinal) {
+          // We have data but no uploader (metadata processing failed) - clean up
+          log_->warn("Session::processBuffer connection closed with data but no StorageUploader.");
+          auto self = shared_from_this();
+          ConnectionManager::getInstance().destroySession(self.get());
       }
   }
   else if (isFinal) {

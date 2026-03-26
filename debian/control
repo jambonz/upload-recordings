@@ -1,0 +1,31 @@
+Source: upload-recordings
+Section: net
+Priority: optional
+Maintainer: Dave Horton <daveh@beachdognet.com>
+Build-Depends: debhelper (>= 13),
+               autoconf,
+               automake,
+               build-essential,
+               cmake,
+               git,
+               pkg-config,
+               libcjson-dev,
+               libmp3lame-dev,
+               libmysqlcppconn-dev,
+               libspdlog-dev,
+               libfmt-dev,
+               libssl-dev,
+               libcurl4-openssl-dev,
+               libgoogle-perftools-dev,
+               libboost-all-dev,
+               libev-dev
+Standards-Version: 4.6.0
+Homepage: https://jambonz.org
+
+Package: upload-recordings
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: High-performance call recording uploader for jambonz
+ A C++ service that receives call recordings over WebSocket and uploads
+ them to cloud storage backends including AWS S3, S3-compatible services,
+ Azure Blob Storage, and Google Cloud Storage.

@@ -34,7 +34,7 @@ enum class StorageService {
 // Modified Session class that works with thread pool
 class Session : public std::enable_shared_from_this<Session> {
 public:
-    Session();
+    Session(const std::string& sessionId);
     ~Session();
 
     static void initialize() {
@@ -97,6 +97,7 @@ private:
     Metadata_t metadata_;
     std::string account_sid_;
     std::string call_sid_;
+    std::string session_id_;
 
     RecordFileType recordFileType_;
     StorageService storage_service_;
