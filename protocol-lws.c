@@ -186,9 +186,12 @@ callback_minimal(struct lws *wsi, enum lws_callback_reasons reason,
       break;
     }
 
-    case LWS_CALLBACK_ESTABLISHED:
-        pss->session = create_session();
+    case LWS_CALLBACK_ESTABLISHED: {
+        char peer[128];
+        lws_get_peer_simple(wsi, peer, sizeof(peer));
+        pss->session = create_session(peer);
         break;
+    }
 
     case LWS_CALLBACK_CLOSED:
         if (pss->session) {

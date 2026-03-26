@@ -53,16 +53,16 @@ public:
     }
 
     // Create a new session for a connection
-    void* createSession() {
+    void* createSession(const std::string& peerAddress) {
         try {
-            auto session = std::make_shared<Session>();
+            auto session = std::make_shared<Session>(peerAddress);
             void* rawPtr = session.get();
-            
+
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 sessions_[rawPtr] = session;
                 // Log the session count after creation
-                spdlog::info("session created - there are now {} active sessions", sessions_.size());
+                spdlog::info("session created from {} - there are now {} active sessions", peerAddress, sessions_.size());
                 
                 // Send session count to statsd
                 if (auto* statsd = getStatsdClient()) {

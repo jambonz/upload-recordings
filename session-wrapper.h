@@ -8,7 +8,7 @@ extern "C" {
 #include <stddef.h>
 
 // Create a new Session instance
-void *create_session();
+void *create_session(const char *peer_address);
 
 // Add data to the Session buffer
 void add_data_to_session(void *session, int isBinary, const char *data, size_t len);

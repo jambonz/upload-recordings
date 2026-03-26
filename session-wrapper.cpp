@@ -4,9 +4,9 @@
 extern "C" {
 
 // Create a new Session instance via the connection manager
-void *create_session() {
+void *create_session(const char *peer_address) {
   try {
-    return ConnectionManager::getInstance().createSession();
+    return ConnectionManager::getInstance().createSession(peer_address ? peer_address : "unknown");
   } catch (const std::exception &e) {
     std::cerr << "Session creation failed: " << e.what() << std::endl;
     return nullptr;
