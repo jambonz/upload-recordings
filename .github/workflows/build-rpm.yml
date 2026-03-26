@@ -31,6 +31,7 @@ jobs:
             automake \
             pkg-config \
             openssl-devel \
+            zlib-devel \
             boost-devel \
             libcurl-devel \
             gperftools-devel \
@@ -42,7 +43,7 @@ jobs:
             mysql-connector-c++-devel
 
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -59,7 +60,9 @@ jobs:
           echo "Building version: ${VERSION}"
 
       - name: Update spec file version
+        working-directory: ${{ github.workspace }}
         run: |
+          ls -la el/
           sed -i "s/^Version:.*/Version: ${{ steps.version.outputs.VERSION }}/" el/upload-recordings.spec
 
       - name: Create source tarball
