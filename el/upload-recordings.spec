@@ -16,6 +16,7 @@ BuildRequires: automake
 BuildRequires: git
 BuildRequires: pkg-config
 BuildRequires: openssl-devel
+BuildRequires: zlib-devel
 BuildRequires: boost-devel
 BuildRequires: libcurl-devel
 BuildRequires: gperftools-devel
@@ -128,6 +129,6 @@ rm -rf /usr/local/src/aws-sdk-cpp
 %doc README.md
 
 %changelog
-* Wed Mar 26 2026 Dave Horton <daveh@beachdognet.com> - 1.0.0-1
+* Thu Mar 26 2026 Dave Horton <daveh@beachdognet.com> - 1.0.0-1
   - Initial RPM packaging for RHEL 9
   - Builds libwebsockets and AWS SDK C++ from source
