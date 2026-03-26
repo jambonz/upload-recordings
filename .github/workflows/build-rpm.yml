@@ -59,7 +59,9 @@ jobs:
           echo "Building version: ${VERSION}"
 
       - name: Update spec file version
+        working-directory: ${{ github.workspace }}
         run: |
+          ls -la el/
           sed -i "s/^Version:.*/Version: ${{ steps.version.outputs.VERSION }}/" el/upload-recordings.spec
 
       - name: Create source tarball
