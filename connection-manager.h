@@ -107,6 +107,12 @@ public:
         }
     }
 
+    // Check if a session exists in the map
+    bool hasSession(void* sessionPtr) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return sessions_.find(sessionPtr) != sessions_.end();
+    }
+
     // Get session count
     size_t getSessionCount() const {
         std::lock_guard<std::mutex> lock(mutex_);

@@ -18,16 +18,14 @@ void *create_session() {
 
 // Add data to the Session buffer
 void add_data_to_session(void *session, int isBinary, const char *data, size_t len) {
-  auto p = static_cast<Session*>(session)->shared_from_this();
-  if (session) {
+  if (session && ConnectionManager::getInstance().hasSession(session)) {
     static_cast<Session *>(session)->addData(isBinary, data, len);
   }
 }
 
 // Notify the Session that the connection is closed
 void notify_session_close(void *session) {
-  auto p = static_cast<Session*>(session)->shared_from_this();
-  if (session) {
+  if (session && ConnectionManager::getInstance().hasSession(session)) {
     static_cast<Session *>(session)->notifyClose();
   }
 }
