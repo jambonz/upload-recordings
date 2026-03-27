@@ -43,6 +43,12 @@ public:
             const char* tempFolderEnv = std::getenv("JAMBONZ_UPLOADER_TMP_FOLDER");
             uploadFolder_ = tempFolderEnv ? tempFolderEnv : "/tmp/uploads";
 
+            const char* metadataTimeoutEnv = std::getenv("JAMBONZ_METADATA_TIMEOUT_SECS");
+            if (metadataTimeoutEnv) {
+                int val = std::atoi(metadataTimeoutEnv);
+                if (val > 0) metadataTimeoutSecs_ = val;
+            }
+
             // Ensure the folder exists
             std::filesystem::create_directories(uploadFolder_);
         });
@@ -66,6 +72,9 @@ public:
 
     void setContext(const std::string& account_sid, const std::string& call_sid);
 
+    // Start timer to detect abandoned connections (no metadata received)
+    void startMetadataTimer();
+
     // Add data to the session buffer
     void addData(int isBinary, const char *data, size_t len);
 
@@ -81,6 +90,7 @@ private:
     static size_t bufferProcessSize_;  // Configurable buffer process threshold
     static size_t maxBufferSize_;      // Configurable max buffer size
     static int awsMaxConnections_;     // Configurable AWS max connections
+    static int metadataTimeoutSecs_;   // Timeout for metadata receipt
 
     static std::once_flag initFlag_;
     static std::string uploadFolder_;
@@ -88,6 +98,7 @@ private:
 
     std::shared_ptr<spdlog::logger> log_;
     boost::asio::io_context::strand strand_; // Strand for serialized task execution
+    boost::asio::steady_timer metadataTimer_; // Timer to detect abandoned connections
 
     std::vector<char> buffer_; // Buffer for audio data
     std::mutex mutex_;         // Protect access to the buffer

@@ -16,11 +16,13 @@ CryptoHelper Session::cryptoHelper_ = CryptoHelper();
 size_t Session::bufferProcessSize_ = 512 * 1024;     // 512KB default
 size_t Session::maxBufferSize_ = 3 * 1024 * 1024;    // 3MB default
 int Session::awsMaxConnections_ = 8;                  // Default
+int Session::metadataTimeoutSecs_ = 3;                // Default
 
 Session::Session(const std::string& sessionId)
     : json_metadata_(nullptr),
       storage_service_(StorageService::UNKNOWN),
       strand_(ThreadPool::getInstance().createStrand()),
+      metadataTimer_(ThreadPool::getInstance().getIoContext()),
       session_id_(sessionId) {
 
     // Create a unique sink for this session
@@ -74,6 +76,7 @@ void Session::addData(int isBinary, const char *data, size_t len) {
             if (json != nullptr) {
                 json_metadata_ = json;
                 metadata_received_ = true;
+                metadataTimer_.cancel();
                 postProcessMetadataTask();
             }
         }
@@ -89,7 +92,22 @@ void Session::addData(int isBinary, const char *data, size_t len) {
 
 void Session::notifyClose() {
     log_->info("connection closed");
+    metadataTimer_.cancel();
     postProcessBufferTask(true);
+}
+
+void Session::startMetadataTimer() {
+    metadataTimer_.expires_after(std::chrono::seconds(metadataTimeoutSecs_));
+    auto self = shared_from_this();
+    metadataTimer_.async_wait(boost::asio::bind_executor(strand_,
+        [self](const boost::system::error_code& ec) {
+            if (ec) return;  // Timer was cancelled (metadata arrived in time)
+            if (!self->metadata_received_) {
+                self->log_->warn("No metadata received within timeout, destroying session");
+                ConnectionManager::getInstance().destroySession(self.get());
+            }
+        }
+    ));
 }
 
 void Session::postProcessMetadataTask() {

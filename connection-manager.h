@@ -65,13 +65,16 @@ public:
                 sessions_[rawPtr] = session;
                 // Log the session count after creation
                 spdlog::info("session {} created - there are now {} active sessions", sessionId, sessions_.size());
-                
+
                 // Send session count to statsd
                 if (auto* statsd = getStatsdClient()) {
                     statsd->gauge("recording.sessions.count", sessions_.size());
                 }
             }
-            
+
+            // Start timer to detect abandoned connections (must be after session is in the map)
+            session->startMetadataTimer();
+
             return rawPtr;
         } catch (const std::exception& e) {
             spdlog::error("Failed to create session: {}", e.what());
