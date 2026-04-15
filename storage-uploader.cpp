@@ -1,6 +1,6 @@
 #include "storage-uploader.h"
 #include "connection-manager.h"
-#include <aws/core/external/cjson/cJSON.h>
+#include <aws/core/utils/json/JsonSerializer.h>
 #include <iostream>
 #include <stdexcept>
 #include <cstdio>
@@ -77,19 +77,11 @@ std::string StorageUploader::createSessionJsonPath(const std::string& callSid) {
 }
 
 std::string StorageUploader::stampAndSerializeSessionSummary(const std::string& recordingKey) {
-    cJSON *json = cJSON_AS4CPP_Parse(sessionSummaryJson_.c_str());
-    if (!json) {
+    Aws::Utils::Json::JsonValue json(sessionSummaryJson_);
+    if (!json.WasParseSuccessful()) {
         log_->error("Failed to parse session summary JSON");
         return {};
     }
-    cJSON_AS4CPP_AddStringToObject(json, "recording_key", recordingKey.c_str());
-    char *printed = cJSON_AS4CPP_PrintUnformatted(json);
-    cJSON_AS4CPP_Delete(json);
-    if (!printed) {
-        log_->error("Failed to serialize stamped session summary");
-        return {};
-    }
-    std::string body(printed);
-    cJSON_AS4CPP_free(printed);
-    return body;
+    json.WithString("recording_key", recordingKey);
+    return json.View().WriteCompact();
 }

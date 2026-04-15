@@ -6,7 +6,7 @@
 #include <cstdlib>
 #include <atomic>
 
-#include <ev.h>  
+#include <ev.h>
 
 #include <aws/core/Aws.h>
 
