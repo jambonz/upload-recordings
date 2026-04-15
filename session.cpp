@@ -81,7 +81,29 @@ void Session::addData(int isBinary, const char *data, size_t len) {
             }
         }
         else {
-            log_->info("Unexpected text frame after metadata: {}", std::string(data, len));
+            // Check if this is a session:summary message (observability)
+            std::string text(data, len);
+            cJSON *json = cJSON_AS4CPP_Parse(text.c_str());
+            if (json) {
+                cJSON *typeField = cJSON_AS4CPP_GetObjectItem(json, "type");
+                if (typeField && cJSON_AS4CPP_IsString(typeField) &&
+                    std::string(typeField->valuestring) == "session:summary") {
+                    cJSON *dataField = cJSON_AS4CPP_GetObjectItem(json, "data");
+                    if (dataField) {
+                        char *printed = cJSON_AS4CPP_PrintUnformatted(dataField);
+                        if (printed) {
+                            sessionSummaryJson_ = printed;
+                            cJSON_AS4CPP_free(printed);
+                            log_->info("Received session:summary ({} bytes)", sessionSummaryJson_.size());
+                        }
+                    }
+                } else {
+                    log_->info("Unexpected text frame after metadata: {}", text);
+                }
+                cJSON_AS4CPP_Delete(json);
+            } else {
+                log_->info("Unexpected non-JSON text frame after metadata: {}", text);
+            }
         }
     }
     
@@ -234,6 +256,12 @@ void Session::processBuffer(bool isFinal) {
       }
   }
   
+  // Pass session summary to uploader before final upload
+  if (isFinal && !sessionSummaryJson_.empty() && storageUploader_) {
+      storageUploader_->setSessionSummary(sessionSummaryJson_);
+      log_->info("Session summary passed to storage uploader");
+  }
+
   // Process the buffer if we have data
   if (process_buffer) {
       log_->debug("Processing buffer of size: {}", localBuffer.size());
@@ -253,8 +281,8 @@ void Session::processBuffer(bool isFinal) {
   else if (isFinal) {
     if (storageUploader_) {
       std::string threadId = getThreadIdString();
-      log_->info("uploading recording in threadId: {}", threadId);  
-  
+      log_->info("uploading recording in threadId: {}", threadId);
+
       storageUploader_->upload(localBuffer, isFinal);
     }
     else {

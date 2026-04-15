@@ -233,6 +233,12 @@ bool AzureUploader::upload(std::vector<char>& data, bool isFinalChunk) {
     }
 
     log_->info("File uploaded successfully to Azure: {}", objectKey_);
+
+    // Upload session summary if available
+    if (hasSessionSummary()) {
+      uploadSessionSummary(objectKey_);
+    }
+
     // If we created a new WAV or MP3 file, delete it.
     if (recordFileType_ == RecordFileType::WAV || recordFileType_ == RecordFileType::MP3) {
       std::remove(finalFilePath.c_str());
@@ -470,4 +476,56 @@ size_t AzureUploader::writeCallback(void* contents, size_t size, size_t nmemb, v
     (void)contents;
     (void)userp;
     return size * nmemb;
+}
+
+void AzureUploader::uploadSessionSummary(const std::string& recordingKey) {
+    try {
+        std::string body = stampAndSerializeSessionSummary(recordingKey);
+        if (body.empty()) return;
+
+        std::string sessionKey = createSessionJsonPath(metadata_.call_sid);
+        log_->info("Uploading session.json to Azure: {}", sessionKey);
+
+        // Azure PUT Blob (BlockBlob) — single request, no chunking needed for small JSON
+        std::string sessionUrl = uploadUrlBase_ + sessionKey;
+        std::string contentLength = std::to_string(body.size());
+        xMsDate_ = getCurrentDateTimeRFC1123();
+        std::string authorizationHeader = generateAuthorizationHeader("PUT", sessionUrl, contentLength);
+
+        MemoryBuffer buffer = { body.c_str(), body.size() };
+
+        curl_easy_reset(curl_);
+        curl_easy_setopt(curl_, CURLOPT_URL, sessionUrl.c_str());
+        curl_easy_setopt(curl_, CURLOPT_UPLOAD, 1L);
+        curl_easy_setopt(curl_, CURLOPT_READFUNCTION, readCallback);
+        curl_easy_setopt(curl_, CURLOPT_READDATA, &buffer);
+        curl_easy_setopt(curl_, CURLOPT_INFILESIZE_LARGE, static_cast<curl_off_t>(body.size()));
+        curl_easy_setopt(curl_, CURLOPT_VERBOSE, 0L);
+
+        struct curl_slist* localHeaders = nullptr;
+        localHeaders = curl_slist_append(localHeaders, "Content-Type: application/octet-stream");
+        localHeaders = curl_slist_append(localHeaders, ("Authorization: " + authorizationHeader).c_str());
+        localHeaders = curl_slist_append(localHeaders, ("x-ms-date: " + xMsDate_).c_str());
+        localHeaders = curl_slist_append(localHeaders, "x-ms-version: 2020-02-10");
+        localHeaders = curl_slist_append(localHeaders, "x-ms-blob-type: BlockBlob");
+        curl_easy_setopt(curl_, CURLOPT_HTTPHEADER, localHeaders);
+
+        CURLcode res = curl_easy_perform(curl_);
+        curl_slist_free_all(localHeaders);
+
+        if (res != CURLE_OK) {
+            log_->error("Failed to upload session.json to Azure: {}", curl_easy_strerror(res));
+            return;
+        }
+
+        long httpCode = 0;
+        curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &httpCode);
+        if (httpCode == 201) {
+            log_->info("session.json uploaded successfully to Azure: {}", sessionKey);
+        } else {
+            log_->error("session.json upload to Azure failed with HTTP code: {}", httpCode);
+        }
+    } catch (const std::exception& e) {
+        log_->error("Exception uploading session.json to Azure: {}", e.what());
+    }
 }

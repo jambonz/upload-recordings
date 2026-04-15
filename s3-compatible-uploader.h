@@ -26,6 +26,7 @@ public:
     ~S3CompatibleUploader();
 
     bool upload(std::vector<char>& data, bool isFinalChunk = false) override;
+    void uploadSessionSummary(const std::string& recordingKey) override;
 
 private:
     RecordFileType recordFileType_;

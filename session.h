@@ -128,6 +128,9 @@ private:
     std::string client_email_;
     std::string token_uri_;
 
+    // Session summary (observability)
+    std::string sessionSummaryJson_;
+
     // Helper methods for task-based processing
     void postProcessMetadataTask();
     void postProcessBufferTask(bool isFinal);

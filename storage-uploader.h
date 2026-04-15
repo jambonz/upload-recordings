@@ -12,6 +12,7 @@
 
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_sinks.h>
+#include <aws/core/external/cjson/cJSON.h>
 #include <memory>
 
 // Forward declaration of Session
@@ -51,6 +52,15 @@ public:
         metadata_ = metadata;
     }
 
+    // Session summary (observability) — set before final upload
+    void setSessionSummary(const std::string& json) {
+        sessionSummaryJson_ = json;
+    }
+
+    bool hasSessionSummary() const {
+        return !sessionSummaryJson_.empty();
+    }
+
     void setLogger(std::shared_ptr<spdlog::logger> log) {
         log_ = log;
     }
@@ -65,9 +75,23 @@ protected:
     // Create the object path for upload
     std::string createObjectPath(const std::string& callSid, const std::string& recordFormat);
 
+    // Create session.json object path: YYYY/MM/DD/{callSid}/session.json
+    std::string createSessionJsonPath(const std::string& callSid);
+
+    // Stamp recording_key into sessionSummaryJson_ and return the final JSON body.
+    // Returns empty string on failure.
+    std::string stampAndSerializeSessionSummary(const std::string& recordingKey);
+
+    // Get current date prefix as "YYYY/MM/DD/"
+    static std::string currentDatePrefix();
+
+    // Upload session.json to storage — called from finalizeUpload after audio upload
+    virtual void uploadSessionSummary(const std::string& objectKey) = 0;
+
     std::shared_ptr<spdlog::logger> log_;
 
     struct Metadata_t metadata_;
+    std::string sessionSummaryJson_;
     bool upload_in_progress_ = false;
     bool upload_failed_ = false;
 

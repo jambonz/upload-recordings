@@ -289,6 +289,11 @@ void GoogleUploader::finalizeUpload() {
     log_->info("File uploaded successfully to Google Cloud Storage: {}", objectKey_);
   }
 
+  // Upload session summary if available
+  if (!upload_failed_ && hasSessionSummary()) {
+    uploadSessionSummary(objectKey_);
+  }
+
   // If we created a new WAV or MP3 file, delete it.
   if (recordFileType_ == RecordFileType::WAV || recordFileType_ == RecordFileType::MP3) {
     std::remove(finalFilePath.c_str());
@@ -517,4 +522,68 @@ size_t GoogleUploader::writeCallback(void* contents, size_t size, size_t nmemb, 
     std::string* str = static_cast<std::string*>(userp);
     str->append(static_cast<char*>(contents), totalSize);
     return totalSize;
+}
+
+void GoogleUploader::uploadSessionSummary(const std::string& recordingKey) {
+    std::string body = stampAndSerializeSessionSummary(recordingKey);
+    if (body.empty()) return;
+
+    std::string sessionKey = createSessionJsonPath(metadata_.call_sid);
+    log_->info("Uploading session.json to GCS: {}", sessionKey);
+
+    if (accessToken_.empty()) {
+        accessToken_ = generateOAuthToken();
+        if (accessToken_.empty()) {
+            log_->error("Failed to get OAuth token for session.json upload");
+            return;
+        }
+    }
+
+    std::string url = "https://storage.googleapis.com/upload/storage/v1/b/" +
+        bucketName_ + "/o?uploadType=media&name=" + sessionKey;
+
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        log_->error("Failed to initialize CURL for session.json upload");
+        return;
+    }
+
+    struct curl_slist* headers = nullptr;
+    // Use unique_ptr-style cleanup to avoid leaks on any exit path
+    auto cleanup = [&]() {
+        curl_easy_cleanup(curl);
+        if (headers) curl_slist_free_all(headers);
+    };
+
+    try {
+        std::string responseBody;
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_POST, 1L);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseBody);
+        curl_easy_setopt(curl, CURLOPT_VERBOSE, 0L);
+
+        headers = curl_slist_append(headers, ("Authorization: Bearer " + accessToken_).c_str());
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+        CURLcode res = curl_easy_perform(curl);
+        if (res != CURLE_OK) {
+            log_->error("Failed to upload session.json to GCS: {}", curl_easy_strerror(res));
+        } else {
+            long httpCode = 0;
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+            if (httpCode == 200) {
+                log_->info("session.json uploaded successfully to GCS: {}", sessionKey);
+            } else {
+                log_->error("session.json upload to GCS failed with HTTP code: {}", httpCode);
+            }
+        }
+    } catch (const std::exception& e) {
+        log_->error("Exception uploading session.json to GCS: {}", e.what());
+    }
+
+    cleanup();
 }

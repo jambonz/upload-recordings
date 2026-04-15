@@ -55,21 +55,40 @@ void StorageUploader::cleanupTempFile() {
     }
 }
 
-std::string StorageUploader::createObjectPath(const std::string& callSid, const std::string& recordFormat) {
-    // Get the current date and time
+std::string StorageUploader::currentDatePrefix() {
     std::time_t t = std::time(nullptr);
-    std::tm tm = *std::localtime(&t);
+    std::tm tm{};
+    localtime_r(&t, &tm);  // thread-safe
 
-    // Create a string stream to format the path
-    std::ostringstream pathStream;
+    std::ostringstream s;
+    s << tm.tm_year + 1900 << "/"
+      << std::setfill('0') << std::setw(2) << tm.tm_mon + 1 << "/"
+      << std::setfill('0') << std::setw(2) << tm.tm_mday << "/";
+    return s.str();
+}
 
-    // Append year, month, and day, formatted as YYYY/MM/DD
-    pathStream << tm.tm_year + 1900 << "/"
-               << std::setfill('0') << std::setw(2) << tm.tm_mon + 1 << "/"
-               << std::setfill('0') << std::setw(2) << tm.tm_mday << "/";
+std::string StorageUploader::createObjectPath(const std::string& callSid, const std::string& recordFormat) {
+    return currentDatePrefix() + callSid + "." + recordFormat;
+}
 
-    // Append the callSid and recordFormat to the path
-    pathStream << callSid << "." << recordFormat;
+std::string StorageUploader::createSessionJsonPath(const std::string& callSid) {
+    return currentDatePrefix() + callSid + "/session.json";
+}
 
-    return pathStream.str();
+std::string StorageUploader::stampAndSerializeSessionSummary(const std::string& recordingKey) {
+    cJSON *json = cJSON_AS4CPP_Parse(sessionSummaryJson_.c_str());
+    if (!json) {
+        log_->error("Failed to parse session summary JSON");
+        return {};
+    }
+    cJSON_AS4CPP_AddStringToObject(json, "recording_key", recordingKey.c_str());
+    char *printed = cJSON_AS4CPP_PrintUnformatted(json);
+    cJSON_AS4CPP_Delete(json);
+    if (!printed) {
+        log_->error("Failed to serialize stamped session summary");
+        return {};
+    }
+    std::string body(printed);
+    cJSON_AS4CPP_free(printed);
+    return body;
 }
