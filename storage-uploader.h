@@ -12,7 +12,6 @@
 
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_sinks.h>
-#include <aws/core/external/cjson/cJSON.h>
 #include <memory>
 
 // Forward declaration of Session

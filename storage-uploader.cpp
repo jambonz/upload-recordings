@@ -1,5 +1,6 @@
 #include "storage-uploader.h"
 #include "connection-manager.h"
+#include <aws/core/external/cjson/cJSON.h>
 #include <iostream>
 #include <stdexcept>
 #include <cstdio>
