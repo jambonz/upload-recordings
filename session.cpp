@@ -81,9 +81,9 @@ void Session::addData(int isBinary, const char *data, size_t len) {
             }
         }
         else {
-            // Check if this is a session:summary message (observability)
-            std::string text(data, len);
-            cJSON *json = cJSON_AS4CPP_Parse(text.c_str());
+            // Buffer text frames and try to parse as session:summary (may be fragmented)
+            sessionSummaryBuffer_.append(data, len);
+            cJSON *json = cJSON_AS4CPP_Parse(sessionSummaryBuffer_.c_str());
             if (json) {
                 cJSON *typeField = cJSON_AS4CPP_GetObjectItem(json, "type");
                 if (typeField && cJSON_AS4CPP_IsString(typeField) &&
@@ -98,12 +98,12 @@ void Session::addData(int isBinary, const char *data, size_t len) {
                         }
                     }
                 } else {
-                    log_->info("Unexpected text frame after metadata: {}", text);
+                    log_->info("Unexpected text frame after metadata: {}", sessionSummaryBuffer_);
                 }
                 cJSON_AS4CPP_Delete(json);
-            } else {
-                log_->info("Unexpected non-JSON text frame after metadata: {}", text);
+                sessionSummaryBuffer_.clear();
             }
+            // If parse fails, keep buffering - more fragments may arrive
         }
     }
     

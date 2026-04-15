@@ -130,6 +130,7 @@ private:
 
     // Session summary (observability)
     std::string sessionSummaryJson_;
+    std::string sessionSummaryBuffer_;  // Buffer for fragmented text frames
 
     // Helper methods for task-based processing
     void postProcessMetadataTask();
