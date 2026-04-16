@@ -83,5 +83,48 @@ std::string StorageUploader::stampAndSerializeSessionSummary(const std::string& 
         return {};
     }
     json.WithString("recording_key", recordingKey);
+
+    // Calculate and stamp recording_started_at_ms if we have audio start time
+    if (audioStartTimeSet_) {
+        auto callStartStr = json.View().GetString("call_start");
+        if (!callStartStr.empty()) {
+            // Parse ISO8601 timestamp: "2026-04-16T18:24:43.955Z"
+            std::tm tm = {};
+            int millis = 0;
+            std::istringstream ss(std::string(callStartStr.c_str()));
+            ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
+            if (!ss.fail()) {
+                // Parse optional milliseconds
+                char c;
+                if (ss >> c && c == '.') {
+                    ss >> millis;
+                    // Handle variable precision (could be .9, .95, .955, etc)
+                    std::string remaining;
+                    std::getline(ss, remaining, 'Z');
+                    // millis now contains the fractional part, normalize to ms
+                    int digits = std::to_string(millis).length();
+                    while (digits < 3) { millis *= 10; digits++; }
+                    while (digits > 3) { millis /= 10; digits--; }
+                }
+
+                // Convert to milliseconds since epoch
+                auto callStartEpoch = timegm(&tm);
+                int64_t callStartMs = static_cast<int64_t>(callStartEpoch) * 1000 + millis;
+
+                // Convert audioStartTime_ to milliseconds since epoch
+                auto audioStartMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    audioStartTime_.time_since_epoch()).count();
+
+                // Calculate offset
+                int64_t recordingOffset = audioStartMs - callStartMs;
+                json.WithInt64("recording_started_at_ms", recordingOffset);
+                log_->info("Stamped recording_started_at_ms: {} (audio started {}ms after call_start)",
+                    recordingOffset, recordingOffset);
+            } else {
+                log_->warn("Failed to parse call_start timestamp: {}", callStartStr.c_str());
+            }
+        }
+    }
+
     return json.View().WriteCompact();
 }

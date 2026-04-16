@@ -9,6 +9,7 @@
 #include <fstream>
 #include <filesystem>
 #include <atomic>
+#include <chrono>
 
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_sinks.h>
@@ -60,6 +61,12 @@ public:
         return !sessionSummaryJson_.empty();
     }
 
+    // Audio start timestamp for recording offset calculation
+    void setAudioStartTime(std::chrono::system_clock::time_point t) {
+        audioStartTime_ = t;
+        audioStartTimeSet_ = true;
+    }
+
     void setLogger(std::shared_ptr<spdlog::logger> log) {
         log_ = log;
     }
@@ -93,6 +100,10 @@ protected:
     std::string sessionSummaryJson_;
     bool upload_in_progress_ = false;
     bool upload_failed_ = false;
+
+    // Audio start timestamp for recording offset calculation
+    std::chrono::system_clock::time_point audioStartTime_;
+    bool audioStartTimeSet_ = false;
 
     std::string tempFilePath_;
     std::ofstream tempFile_;

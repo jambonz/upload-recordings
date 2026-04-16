@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <filesystem>
+#include <chrono>
 
 #include <boost/asio.hpp>
 #include <boost/enable_shared_from_this.hpp>
@@ -131,6 +132,10 @@ private:
     // Session summary (observability)
     std::string sessionSummaryJson_;
     std::string sessionSummaryBuffer_;  // Buffer for fragmented text frames
+
+    // Audio start timestamp for recording offset calculation
+    std::chrono::system_clock::time_point audioStartTime_;
+    bool audioStartTimeSet_ = false;
 
     // Helper methods for task-based processing
     void postProcessMetadataTask();

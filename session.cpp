@@ -63,6 +63,13 @@ void Session::addData(int isBinary, const char *data, size_t len) {
         }
 
         if (isBinary) {
+            // Capture timestamp when first audio data arrives
+            if (!audioStartTimeSet_) {
+                audioStartTime_ = std::chrono::system_clock::now();
+                audioStartTimeSet_ = true;
+                log_->info("First audio data received, timestamp captured for recording offset");
+            }
+
             buffer_.insert(buffer_.end(), data, data + len);
 
             // Process the buffer if it reaches the configurable threshold
@@ -259,6 +266,9 @@ void Session::processBuffer(bool isFinal) {
   // Pass session summary to uploader before final upload
   if (isFinal && !sessionSummaryJson_.empty() && storageUploader_) {
       storageUploader_->setSessionSummary(sessionSummaryJson_);
+      if (audioStartTimeSet_) {
+          storageUploader_->setAudioStartTime(audioStartTime_);
+      }
       log_->info("Session summary passed to storage uploader");
   }
 
