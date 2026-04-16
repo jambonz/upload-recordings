@@ -34,6 +34,14 @@ Session::Session(const std::string& sessionId)
 
     buffer_.reserve(maxBufferSize_);  // Use configurable max buffer size
     initialize();
+
+    // Capture audio start time at connection establishment.
+    // FreeSWITCH buffers ~1 second of audio before sending the first chunk,
+    // so we can't rely on when the first binary arrives. Instead, we use
+    // the connection time plus 20ms (one RTP packetization period) to
+    // approximate when audio capture actually started.
+    audioStartTime_ = std::chrono::system_clock::now() + std::chrono::milliseconds(20);
+    audioStartTimeSet_ = true;
 }
 
 Session::~Session() {  
@@ -63,12 +71,8 @@ void Session::addData(int isBinary, const char *data, size_t len) {
         }
 
         if (isBinary) {
-            // Capture timestamp when first audio data arrives
-            if (!audioStartTimeSet_) {
-                audioStartTime_ = std::chrono::system_clock::now();
-                audioStartTimeSet_ = true;
-                log_->info("First audio data received, timestamp captured for recording offset");
-            }
+            // Note: audioStartTime_ is set in constructor at connection time + 20ms
+            // to account for FreeSWITCH's ~1 second audio buffering before first send
 
             buffer_.insert(buffer_.end(), data, data + len);
 
