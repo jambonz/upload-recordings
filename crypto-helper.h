@@ -14,7 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 
-#include <aws/core/external/cjson/cJSON.h>
+#include "yyjson.h"
 
 // Global base64Encode function
 static std::string base64Encode(const unsigned char* data, size_t length) {
@@ -58,28 +58,32 @@ public:
         std::string ivHex, contentHex;
 
         // Parse the JSON
-        cJSON *json = cJSON_AS4CPP_Parse(encryptedData.c_str());
-        if (!json) {
+        yyjson_doc *doc = yyjson_read(encryptedData.c_str(), encryptedData.size(), 0);
+        if (!doc) {
             throw std::runtime_error("Failed to parse encrypted data JSON");
         }
 
-        cJSON* jIvHex = cJSON_AS4CPP_GetObjectItem(json, "iv");
-        if (jIvHex && cJSON_AS4CPP_IsString(jIvHex)) {
-            ivHex = jIvHex->valuestring;
+        yyjson_val *json = yyjson_doc_get_root(doc);
+
+        yyjson_val* jIvHex = yyjson_obj_get(json, "iv");
+        if (jIvHex && yyjson_is_str(jIvHex)) {
+            ivHex = yyjson_get_str(jIvHex);
             //std::cout << "Parsed IV (Hex): " << ivHex << std::endl;
         } else {
+            yyjson_doc_free(doc);
             throw std::runtime_error("IV not found in encrypted data JSON");
         }
 
-        cJSON* jContentHex = cJSON_AS4CPP_GetObjectItem(json, "content");
-        if (jContentHex && cJSON_AS4CPP_IsString(jContentHex)) {
-            contentHex = jContentHex->valuestring;
+        yyjson_val* jContentHex = yyjson_obj_get(json, "content");
+        if (jContentHex && yyjson_is_str(jContentHex)) {
+            contentHex = yyjson_get_str(jContentHex);
             //std::cout << "Parsed Encrypted Content (Hex): " << contentHex << std::endl;
         } else {
+            yyjson_doc_free(doc);
             throw std::runtime_error("Content not found in encrypted data JSON");
         }
 
-        cJSON_AS4CPP_Delete(json);
+        yyjson_doc_free(doc);
 
         // Convert IV and content from hex to binary
         std::vector<unsigned char> iv = hexToBytes(ivHex);

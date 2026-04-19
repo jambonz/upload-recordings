@@ -3,7 +3,7 @@
 #include "wav-header.h"
 #include "streaming-mp3-encoder.h"
 
-#include <aws/core/external/cjson/cJSON.h>
+#include "yyjson.h"
 #include <curl/curl.h>
 #include <openssl/pem.h>
 #include <openssl/err.h>
@@ -445,23 +445,24 @@ std::string GoogleUploader::generateOAuthToken() {
     return "";  // Exit early if no response was received
   }
 
-  cJSON* responseJson = cJSON_AS4CPP_Parse(token.c_str());
-  if (!responseJson) {
+  yyjson_doc* responseDoc = yyjson_read(token.c_str(), token.size(), 0);
+  if (!responseDoc) {
     log_->error("Failed to parse OAuth token response JSON: {}", token);
     return "";  // Exit early if JSON parsing failed
   }
 
   // Extract the token from the JSON response
-  cJSON* accessTokenItem = cJSON_AS4CPP_GetObjectItem(responseJson, "access_token");
+  yyjson_val* responseJson = yyjson_doc_get_root(responseDoc);
+  yyjson_val* accessTokenItem = yyjson_obj_get(responseJson, "access_token");
   std::string accessToken;
 
-  if (accessTokenItem && cJSON_AS4CPP_IsString(accessTokenItem)) {
-    accessToken = accessTokenItem->valuestring;
+  if (accessTokenItem && yyjson_is_str(accessTokenItem)) {
+    accessToken = yyjson_get_str(accessTokenItem);
   } else {
     log_->error("OAuth token response does not contain a valid access token: {}", token);
   }
 
-  cJSON_AS4CPP_Delete(responseJson);
+  yyjson_doc_free(responseDoc);
 
   if (accessToken.empty()) {
     log_->error("Failed to retrieve access token from response.");

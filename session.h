@@ -18,7 +18,7 @@
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_sinks.h>
 
-#include <aws/core/external/cjson/cJSON.h>
+#include "yyjson.h"
 
 #include "thread-pool.h"
 #include "mysql-helper.h"
@@ -106,7 +106,8 @@ private:
     std::atomic<bool> closed_; // Flag to indicate session is closed
     std::string tmp_;          // Temporary buffer for text data
     bool metadata_received_ = false;
-    cJSON* json_metadata_;
+    yyjson_doc* json_metadata_doc_;
+    yyjson_val* json_metadata_;
     Metadata_t metadata_;
     std::string account_sid_;
     std::string call_sid_;
@@ -149,7 +150,7 @@ private:
     void parseAwsCredentials(const std::string& credentials);
     void parseAzureCredentials(const std::string& credentials);
     void parseGoogleCredentials(const std::string& credentials);
-    void parseMetadata(cJSON* json);
+    void parseMetadata(yyjson_val* json);
     void extractRegionFromEndpoint(const std::string& endpoint, std::string& regionVar);
     
     // Factory method for creating a StorageUploader
