@@ -3,6 +3,7 @@ MYVERSION=$(shell git describe --always 2>/dev/null || echo 1.0.0)
 bin_PROGRAMS = upload_recordings
 
 upload_recordings_SOURCES = main.cpp \
+  yyjson.c \
   protocol-lws.c \
   session.cpp \
   session-wrapper.cpp \

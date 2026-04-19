@@ -19,7 +19,8 @@ int Session::awsMaxConnections_ = 8;                  // Default
 int Session::metadataTimeoutSecs_ = 3;                // Default
 
 Session::Session(const std::string& sessionId)
-    : json_metadata_(nullptr),
+    : json_metadata_doc_(nullptr),
+      json_metadata_(nullptr),
       storage_service_(StorageService::UNKNOWN),
       strand_(ThreadPool::getInstance().createStrand()),
       metadataTimer_(ThreadPool::getInstance().getIoContext()),
@@ -34,11 +35,19 @@ Session::Session(const std::string& sessionId)
 
     buffer_.reserve(maxBufferSize_);  // Use configurable max buffer size
     initialize();
+
+    // Capture audio start time at connection establishment.
+    // FreeSWITCH buffers ~1 second of audio before sending the first chunk,
+    // so we can't rely on when the first binary arrives. Instead, we use
+    // the connection time plus 20ms (one RTP packetization period) to
+    // approximate when audio capture actually started.
+    audioStartTime_ = std::chrono::system_clock::now() + std::chrono::milliseconds(20);
+    audioStartTimeSet_ = true;
 }
 
-Session::~Session() {  
-  if (json_metadata_) {
-      cJSON_AS4CPP_Delete(json_metadata_);
+Session::~Session() {
+  if (json_metadata_doc_) {
+      yyjson_doc_free(json_metadata_doc_);
   }
 }
 
@@ -63,6 +72,9 @@ void Session::addData(int isBinary, const char *data, size_t len) {
         }
 
         if (isBinary) {
+            // Note: audioStartTime_ is set in constructor at connection time + 20ms
+            // to account for FreeSWITCH's ~1 second audio buffering before first send
+
             buffer_.insert(buffer_.end(), data, data + len);
 
             // Process the buffer if it reaches the configurable threshold
@@ -70,18 +82,42 @@ void Session::addData(int isBinary, const char *data, size_t len) {
                 should_process = true;
             }
         } 
-        else if (!json_metadata_) {
+        else if (!json_metadata_doc_) {
             tmp_.append(data, len);
-            cJSON *json = cJSON_AS4CPP_Parse(tmp_.c_str());
-            if (json != nullptr) {
-                json_metadata_ = json;
+            yyjson_doc *doc = yyjson_read(tmp_.c_str(), tmp_.size(), 0);
+            if (doc != nullptr) {
+                json_metadata_doc_ = doc;
+                json_metadata_ = yyjson_doc_get_root(doc);
                 metadata_received_ = true;
                 metadataTimer_.cancel();
                 postProcessMetadataTask();
             }
         }
         else {
-            log_->info("Unexpected text frame after metadata: {}", std::string(data, len));
+            // Buffer text frames and try to parse as session:summary (may be fragmented)
+            sessionSummaryBuffer_.append(data, len);
+            yyjson_doc *doc = yyjson_read(sessionSummaryBuffer_.c_str(), sessionSummaryBuffer_.size(), 0);
+            if (doc) {
+                yyjson_val *root = yyjson_doc_get_root(doc);
+                yyjson_val *typeField = yyjson_obj_get(root, "type");
+                if (typeField && yyjson_is_str(typeField) &&
+                    std::string(yyjson_get_str(typeField)) == "session:summary") {
+                    yyjson_val *dataField = yyjson_obj_get(root, "data");
+                    if (dataField) {
+                        char *printed = yyjson_val_write(dataField, 0, NULL);
+                        if (printed) {
+                            sessionSummaryJson_ = printed;
+                            free(printed);
+                            log_->info("Received session:summary ({} bytes)", sessionSummaryJson_.size());
+                        }
+                    }
+                } else {
+                    log_->info("Unexpected text frame after metadata: {}", sessionSummaryBuffer_);
+                }
+                yyjson_doc_free(doc);
+                sessionSummaryBuffer_.clear();
+            }
+            // If parse fails, keep buffering - more fragments may arrive
         }
     }
     
@@ -146,35 +182,37 @@ void Session::processMetadata() {
         // Decrypt the bucket credential
         std::string decryptedBucketCredential = cryptoHelper_.decrypt(recordCredentials_->bucketCredential);
 
-        cJSON* bucketCredentialJson = cJSON_AS4CPP_Parse(decryptedBucketCredential.c_str());
-        if (bucketCredentialJson) {
-            cJSON* vendor = cJSON_AS4CPP_GetObjectItem(bucketCredentialJson, "vendor");
-            if (vendor && cJSON_AS4CPP_IsString(vendor)) {
-                if (std::string(vendor->valuestring) == "aws_s3") {
+        yyjson_doc* bucketCredentialDoc = yyjson_read(decryptedBucketCredential.c_str(), decryptedBucketCredential.size(), 0);
+        if (bucketCredentialDoc) {
+            yyjson_val* bucketCredentialJson = yyjson_doc_get_root(bucketCredentialDoc);
+            yyjson_val* vendor = yyjson_obj_get(bucketCredentialJson, "vendor");
+            if (vendor && yyjson_is_str(vendor)) {
+                const char* vendorStr = yyjson_get_str(vendor);
+                if (std::string(vendorStr) == "aws_s3") {
                     storage_service_ = StorageService::AWS_S3;
                     log_->info("Using AWS S3 storage service.");
                     parseAwsCredentials(decryptedBucketCredential);
                 }
-                else if(std::string(vendor->valuestring) == "s3_compatible") {
+                else if(std::string(vendorStr) == "s3_compatible") {
                     storage_service_ = StorageService::S3_COMPATIBLE;
                     log_->info("Using S3 compatible storage service.");
                     parseAwsCredentials(decryptedBucketCredential);
                 }
-                else if(std::string(vendor->valuestring) == "azure") {
+                else if(std::string(vendorStr) == "azure") {
                     storage_service_ = StorageService::AZURE_CLOUD_STORAGE;
                     log_->info("Using Azure storage service.");
                     parseAzureCredentials(decryptedBucketCredential);
                 }
-                else if(std::string(vendor->valuestring) == "google") {
+                else if(std::string(vendorStr) == "google") {
                     storage_service_ = StorageService::GOOGLE_CLOUD_STORAGE;
                     log_->info("Using Google storage service.");
                     parseGoogleCredentials(decryptedBucketCredential);
                 }
                 else {
-                    log_->warn("Unsupported storage service: {}", vendor->valuestring);
+                    log_->warn("Unsupported storage service: {}", vendorStr);
                 }
             }
-            cJSON_AS4CPP_Delete(bucketCredentialJson);
+            yyjson_doc_free(bucketCredentialDoc);
 
             if (recordCredentials_->recordFormat == "mp3") {
                 recordFileType_ = RecordFileType::MP3;
@@ -234,6 +272,15 @@ void Session::processBuffer(bool isFinal) {
       }
   }
   
+  // Pass session summary to uploader before final upload
+  if (isFinal && !sessionSummaryJson_.empty() && storageUploader_) {
+      storageUploader_->setSessionSummary(sessionSummaryJson_);
+      if (audioStartTimeSet_) {
+          storageUploader_->setAudioStartTime(audioStartTime_);
+      }
+      log_->info("Session summary passed to storage uploader");
+  }
+
   // Process the buffer if we have data
   if (process_buffer) {
       log_->debug("Processing buffer of size: {}", localBuffer.size());
@@ -253,8 +300,8 @@ void Session::processBuffer(bool isFinal) {
   else if (isFinal) {
     if (storageUploader_) {
       std::string threadId = getThreadIdString();
-      log_->info("uploading recording in threadId: {}", threadId);  
-  
+      log_->info("uploading recording in threadId: {}", threadId);
+
       storageUploader_->upload(localBuffer, isFinal);
     }
     else {
@@ -269,102 +316,111 @@ void Session::processBuffer(bool isFinal) {
 
 void Session::parseAwsCredentials(const std::string& credentials) {
   // Parse the credentials JSON
-  cJSON* json = cJSON_AS4CPP_Parse(credentials.c_str());
-  if (!json) {
+  yyjson_doc* doc = yyjson_read(credentials.c_str(), credentials.size(), 0);
+  if (!doc) {
     std::cerr << "Failed to parse AWS credentials JSON.\n";
     return;
   }
 
-  cJSON* accessKey = cJSON_AS4CPP_GetObjectItem(json, "access_key_id");
-  if (accessKey && cJSON_AS4CPP_IsString(accessKey)) {
-    access_key_ = accessKey->valuestring;
+  yyjson_val* json = yyjson_doc_get_root(doc);
+
+  yyjson_val* accessKey = yyjson_obj_get(json, "access_key_id");
+  if (accessKey && yyjson_is_str(accessKey)) {
+    access_key_ = yyjson_get_str(accessKey);
   }
 
-  cJSON* secretKey = cJSON_AS4CPP_GetObjectItem(json, "secret_access_key");
-  if (secretKey && cJSON_AS4CPP_IsString(secretKey)) {
-    secret_key_ = secretKey->valuestring;
+  yyjson_val* secretKey = yyjson_obj_get(json, "secret_access_key");
+  if (secretKey && yyjson_is_str(secretKey)) {
+    secret_key_ = yyjson_get_str(secretKey);
   }
 
-  cJSON* bucketName = cJSON_AS4CPP_GetObjectItem(json, "name");
-  if (bucketName && cJSON_AS4CPP_IsString(bucketName)) {
-    bucket_name_ = bucketName->valuestring;
+  yyjson_val* bucketName = yyjson_obj_get(json, "name");
+  if (bucketName && yyjson_is_str(bucketName)) {
+    bucket_name_ = yyjson_get_str(bucketName);
   }
 
-  cJSON* endpoint = cJSON_AS4CPP_GetObjectItem(json, "endpoint");
-  if (endpoint && cJSON_AS4CPP_IsString(endpoint)) {
-    custom_endpoint_ = endpoint->valuestring;
+  yyjson_val* endpoint = yyjson_obj_get(json, "endpoint");
+  if (endpoint && yyjson_is_str(endpoint)) {
+    custom_endpoint_ = yyjson_get_str(endpoint);
   }
 
   // First try to get region from the "region" property
-  cJSON* region = cJSON_AS4CPP_GetObjectItem(json, "region");
-  if (region && cJSON_AS4CPP_IsString(region)) {
-    region_ = region->valuestring;
-  } 
+  yyjson_val* region = yyjson_obj_get(json, "region");
+  if (region && yyjson_is_str(region)) {
+    region_ = yyjson_get_str(region);
+  }
   // If no region was found but we have an endpoint, try to extract region from endpoint
   else if (!custom_endpoint_.empty()) {
     extractRegionFromEndpoint(custom_endpoint_, region_);
   }
 
-  cJSON_AS4CPP_Delete(json);
+  yyjson_doc_free(doc);
 }
 
 void Session::parseAzureCredentials(const std::string& credentials) {
-  cJSON* json = cJSON_AS4CPP_Parse(credentials.c_str());
-  if (!json) {
+  yyjson_doc* doc = yyjson_read(credentials.c_str(), credentials.size(), 0);
+  if (!doc) {
     std::cerr << "Failed to parse Azure credentials JSON.\n";
     return;
   }
 
-  cJSON* containerName = cJSON_AS4CPP_GetObjectItem(json, "name");
-  if (containerName && cJSON_AS4CPP_IsString(containerName)) {
-    container_name_ = containerName->valuestring;
+  yyjson_val* json = yyjson_doc_get_root(doc);
+
+  yyjson_val* containerName = yyjson_obj_get(json, "name");
+  if (containerName && yyjson_is_str(containerName)) {
+    container_name_ = yyjson_get_str(containerName);
   }
 
-  cJSON* connectionString = cJSON_AS4CPP_GetObjectItem(json, "connection_string");
-  if (connectionString && cJSON_AS4CPP_IsString(connectionString)) {
-    connection_string_ = connectionString->valuestring;
+  yyjson_val* connectionString = yyjson_obj_get(json, "connection_string");
+  if (connectionString && yyjson_is_str(connectionString)) {
+    connection_string_ = yyjson_get_str(connectionString);
   }
 
-  cJSON_AS4CPP_Delete(json);
+  yyjson_doc_free(doc);
 }
 
 void Session::parseGoogleCredentials(const std::string& credentials) {
-    cJSON* json = cJSON_AS4CPP_Parse(credentials.c_str());
-    if (!json) {
+    yyjson_doc* doc = yyjson_read(credentials.c_str(), credentials.size(), 0);
+    if (!doc) {
         std::cerr << "Failed to parse Google credentials JSON.\n";
         return;
     }
 
+    yyjson_val* json = yyjson_doc_get_root(doc);
+
     // Extract the bucket name
-    cJSON* bucketName = cJSON_AS4CPP_GetObjectItem(json, "name");
-    if (bucketName && cJSON_AS4CPP_IsString(bucketName)) {
-        bucket_name_ = bucketName->valuestring;
+    yyjson_val* bucketName = yyjson_obj_get(json, "name");
+    if (bucketName && yyjson_is_str(bucketName)) {
+        bucket_name_ = yyjson_get_str(bucketName);
     }
 
     // Extract the service_key field
-    cJSON* serviceKey = cJSON_AS4CPP_GetObjectItem(json, "service_key");
-    if (serviceKey && cJSON_AS4CPP_IsString(serviceKey)) {
-        cJSON* serviceKeyJson = cJSON_AS4CPP_Parse(serviceKey->valuestring);
-        if (serviceKeyJson) {
+    yyjson_val* serviceKey = yyjson_obj_get(json, "service_key");
+    if (serviceKey && yyjson_is_str(serviceKey)) {
+        const char* serviceKeyStr = yyjson_get_str(serviceKey);
+        yyjson_doc* serviceKeyDoc = yyjson_read(serviceKeyStr, strlen(serviceKeyStr), 0);
+        if (serviceKeyDoc) {
+            yyjson_val* serviceKeyJson = yyjson_doc_get_root(serviceKeyDoc);
+
             // Extract the private_key
-            cJSON* privateKey = cJSON_AS4CPP_GetObjectItem(serviceKeyJson, "private_key");
-            if (privateKey && cJSON_AS4CPP_IsString(privateKey)) {
-                private_key_ = privateKey->valuestring;
+            yyjson_val* privateKey = yyjson_obj_get(serviceKeyJson, "private_key");
+            if (privateKey && yyjson_is_str(privateKey)) {
+                private_key_ = yyjson_get_str(privateKey);
             }
 
             // Extract the client_email
-            cJSON* clientEmail = cJSON_AS4CPP_GetObjectItem(serviceKeyJson, "client_email");
-            if (clientEmail && cJSON_AS4CPP_IsString(clientEmail)) {
-                client_email_ = clientEmail->valuestring;
+            yyjson_val* clientEmail = yyjson_obj_get(serviceKeyJson, "client_email");
+            if (clientEmail && yyjson_is_str(clientEmail)) {
+                client_email_ = yyjson_get_str(clientEmail);
             }
 
             // Extract the token_uri
-            cJSON* tokenUri = cJSON_AS4CPP_GetObjectItem(serviceKeyJson, "token_uri");
-            if (tokenUri && cJSON_AS4CPP_IsString(tokenUri)) {
-                token_uri_ = tokenUri->valuestring;
+            yyjson_val* tokenUri = yyjson_obj_get(serviceKeyJson, "token_uri");
+            if (tokenUri && yyjson_is_str(tokenUri)) {
+                token_uri_ = yyjson_get_str(tokenUri);
             }
 
-            cJSON_AS4CPP_Delete(serviceKeyJson); // Clean up the parsed service key JSON
+            yyjson_doc_free(serviceKeyDoc); // Clean up the parsed service key JSON
         } else {
             std::cerr << "Failed to parse service_key JSON.\n";
         }
@@ -372,58 +428,58 @@ void Session::parseGoogleCredentials(const std::string& credentials) {
 
     log_->info("parseGoogleCredentials: bucket_name = {}", bucket_name_);
 
-    cJSON_AS4CPP_Delete(json); // Clean up the main JSON object
+    yyjson_doc_free(doc); // Clean up the main JSON object
 }
 
-void Session::parseMetadata(cJSON* json) {
+void Session::parseMetadata(yyjson_val* json) {
   if (!json) {
     std::cerr << "Invalid JSON object for metadata parsing.\n";
     return;
   }
 
-  cJSON* sampleRate = cJSON_AS4CPP_GetObjectItem(json, "sampleRate");
-  if (sampleRate && cJSON_AS4CPP_IsNumber(sampleRate)) {
-    metadata_.sample_rate = sampleRate->valueint;
+  yyjson_val* sampleRate = yyjson_obj_get(json, "sampleRate");
+  if (sampleRate && yyjson_is_num(sampleRate)) {
+    metadata_.sample_rate = yyjson_get_int(sampleRate);
   }
 
-  cJSON* accountSid = cJSON_AS4CPP_GetObjectItem(json, "accountSid");
-  if (accountSid && cJSON_AS4CPP_IsString(accountSid)) {
-    account_sid_ = accountSid->valuestring;
+  yyjson_val* accountSid = yyjson_obj_get(json, "accountSid");
+  if (accountSid && yyjson_is_str(accountSid)) {
+    account_sid_ = yyjson_get_str(accountSid);
   }
 
-  cJSON* callSid = cJSON_AS4CPP_GetObjectItem(json, "callSid");
-  if (callSid && cJSON_AS4CPP_IsString(callSid)) {
-    metadata_.call_sid = call_sid_ = callSid->valuestring;
+  yyjson_val* callSid = yyjson_obj_get(json, "callSid");
+  if (callSid && yyjson_is_str(callSid)) {
+    metadata_.call_sid = call_sid_ = yyjson_get_str(callSid);
   }
 
-  cJSON* direction = cJSON_AS4CPP_GetObjectItem(json, "direction");
-  if (direction && cJSON_AS4CPP_IsString(direction)) {
-    metadata_.direction = direction->valuestring;
+  yyjson_val* direction = yyjson_obj_get(json, "direction");
+  if (direction && yyjson_is_str(direction)) {
+    metadata_.direction = yyjson_get_str(direction);
   }
 
-  cJSON* from = cJSON_AS4CPP_GetObjectItem(json, "from");
-  if (from && cJSON_AS4CPP_IsString(from)) {
-    metadata_.from = from->valuestring;
+  yyjson_val* from = yyjson_obj_get(json, "from");
+  if (from && yyjson_is_str(from)) {
+    metadata_.from = yyjson_get_str(from);
   }
 
-  cJSON* to = cJSON_AS4CPP_GetObjectItem(json, "to");
-  if (to && cJSON_AS4CPP_IsString(to)) {
-    metadata_.to = to->valuestring;
+  yyjson_val* to = yyjson_obj_get(json, "to");
+  if (to && yyjson_is_str(to)) {
+    metadata_.to = yyjson_get_str(to);
   }
 
-  cJSON* applicationSid = cJSON_AS4CPP_GetObjectItem(json, "applicationSid");
-  if (applicationSid && cJSON_AS4CPP_IsString(applicationSid)) {
-    metadata_.application_sid = applicationSid->valuestring;
+  yyjson_val* applicationSid = yyjson_obj_get(json, "applicationSid");
+  if (applicationSid && yyjson_is_str(applicationSid)) {
+    metadata_.application_sid = yyjson_get_str(applicationSid);
   }
 
-  cJSON* originatingSipIp = cJSON_AS4CPP_GetObjectItem(json, "originatingSipIp");
-  if (originatingSipIp && cJSON_AS4CPP_IsString(originatingSipIp)) {
-    metadata_.originating_sip_id = originatingSipIp->valuestring;
+  yyjson_val* originatingSipIp = yyjson_obj_get(json, "originatingSipIp");
+  if (originatingSipIp && yyjson_is_str(originatingSipIp)) {
+    metadata_.originating_sip_id = yyjson_get_str(originatingSipIp);
   }
 
-  cJSON* originatingSipTrunkName = cJSON_AS4CPP_GetObjectItem(json, "fsSipAddress");
-  if (originatingSipTrunkName && cJSON_AS4CPP_IsString(originatingSipTrunkName)) {
-    metadata_.originating_sip_trunk_name = originatingSipTrunkName->valuestring;
+  yyjson_val* originatingSipTrunkName = yyjson_obj_get(json, "fsSipAddress");
+  if (originatingSipTrunkName && yyjson_is_str(originatingSipTrunkName)) {
+    metadata_.originating_sip_trunk_name = yyjson_get_str(originatingSipTrunkName);
   }
 
   setContext(account_sid_, call_sid_);

@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <filesystem>
+#include <chrono>
 
 #include <boost/asio.hpp>
 #include <boost/enable_shared_from_this.hpp>
@@ -17,7 +18,7 @@
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_sinks.h>
 
-#include <aws/core/external/cjson/cJSON.h>
+#include "yyjson.h"
 
 #include "thread-pool.h"
 #include "mysql-helper.h"
@@ -105,7 +106,8 @@ private:
     std::atomic<bool> closed_; // Flag to indicate session is closed
     std::string tmp_;          // Temporary buffer for text data
     bool metadata_received_ = false;
-    cJSON* json_metadata_;
+    yyjson_doc* json_metadata_doc_;
+    yyjson_val* json_metadata_;
     Metadata_t metadata_;
     std::string account_sid_;
     std::string call_sid_;
@@ -128,6 +130,14 @@ private:
     std::string client_email_;
     std::string token_uri_;
 
+    // Session summary (observability)
+    std::string sessionSummaryJson_;
+    std::string sessionSummaryBuffer_;  // Buffer for fragmented text frames
+
+    // Audio start timestamp for recording offset calculation
+    std::chrono::system_clock::time_point audioStartTime_;
+    bool audioStartTimeSet_ = false;
+
     // Helper methods for task-based processing
     void postProcessMetadataTask();
     void postProcessBufferTask(bool isFinal);
@@ -140,7 +150,7 @@ private:
     void parseAwsCredentials(const std::string& credentials);
     void parseAzureCredentials(const std::string& credentials);
     void parseGoogleCredentials(const std::string& credentials);
-    void parseMetadata(cJSON* json);
+    void parseMetadata(yyjson_val* json);
     void extractRegionFromEndpoint(const std::string& endpoint, std::string& regionVar);
     
     // Factory method for creating a StorageUploader

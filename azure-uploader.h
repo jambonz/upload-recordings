@@ -13,7 +13,7 @@ public:
     ~AzureUploader();
 
     bool upload(std::vector<char>& data, bool isFinalChunk = false) override;
-
+    void uploadSessionSummary(const std::string& recordingKey) override;
 
 private:
   std::string generateAuthorizationHeader(const std::string& httpMethod, const std::string& url, const std::string& contentLength);

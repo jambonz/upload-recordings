@@ -7,7 +7,7 @@
 #include "streaming-mp3-encoder.h"
 #include "string-utils.h"
 #include "s3-client-manager.h"
-#include "session.h" 
+#include "session.h"
 
 constexpr int UPLOAD_TIMEOUT_SECONDS = 600; // 10 minutes timeout
 
@@ -294,7 +294,7 @@ void S3CompatibleUploader::finalizeUpload() {
         
         log_->info("Starting upload of file: {} to {}", tempFilePath_, objectKey_);
         
-        s3CrtClient_->PutObjectAsync(putObjectRequest, 
+        s3CrtClient_->PutObjectAsync(putObjectRequest,
             [this, finalFilePathPtr, promise, startTime](const Aws::S3Crt::S3CrtClient* client,
                                     const Aws::S3Crt::Model::PutObjectRequest& request,
                                     const Aws::S3Crt::Model::PutObjectOutcome& outcome,
@@ -302,34 +302,31 @@ void S3CompatibleUploader::finalizeUpload() {
                 try {
                     if (!outcome.IsSuccess()) {
                         const auto& error = outcome.GetError();
-                        log_->error("Failed to upload file: {}: Error Type: {}, Error Message: {}, Request ID: {}", 
-                            tempFilePath_, 
+                        log_->error("Failed to upload file: {}: Error Type: {}, Error Message: {}, Request ID: {}",
+                            tempFilePath_,
                             static_cast<int>(error.GetErrorType()),
                             error.GetMessage(),
                             error.GetRequestId());
                         upload_failed_ = true;
                     } else {
-                        // Calculate upload duration
                         auto endTime = std::chrono::steady_clock::now();
                         auto duration = std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime).count();
-                        log_->info("File uploaded successfully: {} to {} (took {} seconds)", 
+                        log_->info("File uploaded successfully: {} to {} (took {} seconds)",
                             tempFilePath_, objectKey_, duration);
                     }
-                    
-                    // Cleanup after upload completes
+
+                    // Clean up encoded temp file only — session destruction handled by caller
                     if (recordFileType_ == RecordFileType::WAV || recordFileType_ == RecordFileType::MP3) {
                         std::remove(finalFilePathPtr->c_str());
                     }
-                    cleanupTempFile();
-                    
-                    // Set the promise value to indicate completion
+
                     promise->set_value();
                 } catch (const std::exception& e) {
                     log_->error("Exception in async callback: {}", e.what());
                     promise->set_exception(std::current_exception());
                 }
             });
-            
+
         // Wait for the upload to complete with a timeout
         auto status = future.wait_for(std::chrono::seconds(UPLOAD_TIMEOUT_SECONDS));
         if (status == std::future_status::timeout) {
@@ -337,15 +334,63 @@ void S3CompatibleUploader::finalizeUpload() {
             upload_failed_ = true;
         } else {
             try {
-                future.get(); // This will throw if there was an exception in the callback
+                future.get();
             } catch (const std::exception& e) {
                 log_->error("Exception during upload: {}", e.what());
                 upload_failed_ = true;
             }
         }
-        
+
+        // Upload session summary after audio upload completes (not inside callback — avoids deadlock)
+        if (!upload_failed_ && hasSessionSummary()) {
+            uploadSessionSummary(objectKey_);
+        }
+
+        // Now safe to destroy session
+        cleanupTempFile();
+
     } catch (const std::exception& e) {
         log_->error("Exception in finalizeUpload: {}", e.what());
         upload_failed_ = true;
+    }
+}
+
+void S3CompatibleUploader::uploadSessionSummary(const std::string& recordingKey) {
+    try {
+        std::string body = stampAndSerializeSessionSummary(recordingKey);
+        if (body.empty()) return;
+
+        std::string sessionKey = createSessionJsonPath(metadata_.call_sid);
+        log_->info("Uploading session.json to {}", sessionKey);
+
+        Aws::S3Crt::Model::PutObjectRequest req;
+        req.SetBucket(bucketName_);
+        req.SetKey(sessionKey);
+        req.SetContentType("application/json");
+
+        auto stream = Aws::MakeShared<Aws::StringStream>("SessionJson");
+        *stream << body;
+        req.SetBody(stream);
+
+        auto promise = std::make_shared<std::promise<void>>();
+        auto future = promise->get_future();
+
+        s3CrtClient_->PutObjectAsync(req,
+            [this, sessionKey, promise](const Aws::S3Crt::S3CrtClient*,
+                const Aws::S3Crt::Model::PutObjectRequest&,
+                const Aws::S3Crt::Model::PutObjectOutcome& outcome,
+                const std::shared_ptr<const Aws::Client::AsyncCallerContext>&) {
+                if (!outcome.IsSuccess()) {
+                    log_->error("Failed to upload session.json to {}: {}",
+                        sessionKey, outcome.GetError().GetMessage());
+                } else {
+                    log_->info("session.json uploaded successfully to {}", sessionKey);
+                }
+                promise->set_value();
+            });
+
+        future.wait_for(std::chrono::seconds(30));
+    } catch (const std::exception& e) {
+        log_->error("Exception uploading session.json: {}", e.what());
     }
 }

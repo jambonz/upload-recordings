@@ -14,6 +14,7 @@ public:
     ~GoogleUploader();
 
     bool upload(std::vector<char>& data, bool isFinalChunk = false) override;
+    void uploadSessionSummary(const std::string& recordingKey) override;
 
     static size_t writeHeaderCallback(char* buffer, size_t size, size_t nitems, void* userdata);
 
