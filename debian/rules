@@ -44,6 +44,30 @@ override_dh_auto_build:
 override_dh_auto_install:
 	install -D -m755 build/upload_recordings debian/upload-recordings/usr/bin/upload_recordings
 	install -D -m644 upload_recordings.service debian/upload-recordings/usr/share/doc/upload-recordings/examples/upload_recordings.service
+	# Bundle the libs we built from source (libwebsockets v4.3.3 + custom
+	# ops-ws.c patch, aws-sdk-cpp v1.11.500 and its aws-c-* deps). They
+	# aren't packaged for Debian 12, and the binary would otherwise fail
+	# at startup with "library not found" on a fresh customer box.
+	#
+	# Path: /usr/lib/upload-recordings/ — a private dir, NOT /usr/local/lib.
+	# jambonz-freeswitch.deb already ships the same .so files at
+	# /usr/local/lib/, so we'd hit dpkg file conflicts on a single-host
+	# (jambonz-mini) install. The /etc/ld.so.conf.d/ entry below adds the
+	# private dir to the system-wide ld.so search path so the binary picks
+	# them up automatically — no LD_LIBRARY_PATH needed in the service unit.
+	install -d -m 755 debian/upload-recordings/usr/lib/upload-recordings
+	cp -a /usr/local/lib/libwebsockets*.so*    debian/upload-recordings/usr/lib/upload-recordings/
+	cp -a /usr/local/lib/libaws-c-*.so*        debian/upload-recordings/usr/lib/upload-recordings/
+	cp -a /usr/local/lib/libaws-checksums*.so* debian/upload-recordings/usr/lib/upload-recordings/
+	cp -a /usr/local/lib/libaws-cpp-sdk*.so*   debian/upload-recordings/usr/lib/upload-recordings/
+	cp -a /usr/local/lib/libaws-crt-cpp*.so*   debian/upload-recordings/usr/lib/upload-recordings/
+	cp -a /usr/local/lib/libs2n*.so*           debian/upload-recordings/usr/lib/upload-recordings/
+	# ld.so search-path entry. dpkg will fire the ldconfig trigger on
+	# install/upgrade automatically once this file is present, so no
+	# explicit postinst is needed.
+	install -d -m 755 debian/upload-recordings/etc/ld.so.conf.d
+	echo "/usr/lib/upload-recordings" > debian/upload-recordings/etc/ld.so.conf.d/upload-recordings.conf
+	chmod 644 debian/upload-recordings/etc/ld.so.conf.d/upload-recordings.conf
 
 override_dh_auto_clean:
 	rm -rf build

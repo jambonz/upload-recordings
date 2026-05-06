@@ -10,12 +10,15 @@ Environment="MYSQL_DATABASE=jambones"
 Environment="BASIC_AUTH_USERNAME=xxxxx"
 Environment="BASIC_AUTH_PASSWORD=xxxxx"
 Environment="ENCRYPTION_SECRET=xxxxxx"
-ExecStart=/usr/local/bin/upload_recordings --port 3017
+# When installed via the .deb, the binary lives at /usr/bin/upload_recordings
+# and its bundled .so dependencies are at /usr/lib/upload-recordings/, found
+# automatically via /etc/ld.so.conf.d/upload-recordings.conf. No LD_LIBRARY_PATH
+# is required.
+ExecStart=/usr/bin/upload_recordings --port 3017
 Restart=always
 RestartSec=5
-User=admin
-Group=admin
-WorkingDirectory=/usr/local/bin
+User=root
+Group=daemon
 StandardOutput=journal
 StandardError=journal
 
