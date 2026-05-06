@@ -1,44 +1,84 @@
 name: Build Debian Package
 
+# Triggers:
+#   - workflow_dispatch (manual run from the Actions tab)
+#   - push of a tag matching v* (matches drachtio's convention; bare numeric
+#     tags from this repo's history will NOT trigger builds — use v1.9.0)
 on:
   workflow_dispatch:
   push:
     tags:
-      - '[0-9]*'
+      - 'v*'
+
+# Serialize concurrent runs so simultaneous tag pushes don't race the
+# apt-repo dispatch / S3 upload.
+concurrency:
+  group: build-deb
+  cancel-in-progress: false
 
 jobs:
   build-deb:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
+    # Build inside a Debian bookworm container so the produced .deb links
+    # against the libs customers run on bookworm (libssl3, libstdc++6,
+    # libev, etc.) — not noble's newer libs.
+    container:
+      image: debian:bookworm
+    # debian/rules builds libwebsockets v4.3.3 AND aws-sdk-cpp v1.11.500
+    # from source via `sudo make install`. Combined build is ~30-60min.
+    timeout-minutes: 90
 
     steps:
+      - name: Bootstrap container
+        # debian:bookworm is minimal — install the tools the rest of the
+        # workflow needs. `sudo` must exist on PATH because debian/rules
+        # invokes `sudo make install` for libwebsockets and aws-sdk-cpp
+        # during build (the runner is already root inside the container,
+        # but sudo is still required for the literal command).
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              git curl ca-certificates gnupg awscli sudo xz-utils
+
       - name: Checkout code
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: Get version from git
+      - name: Get version from git tag
         id: version
         run: |
-          VERSION=$(git describe --tags --always 2>/dev/null || echo "0.0.1")
-          # Remove leading 'v' if present
+          # GitHub's container support mounts the workspace owned by a uid
+          # the container's git considers 'dubious'. Allow it explicitly so
+          # `git describe` works.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          # Prefer the actual triggering tag if we're on one (most common
+          # for production runs); fall back to git describe for manual
+          # workflow_dispatch runs.
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION=$(git describe --tags --always 2>/dev/null || echo "0.0.1")
+          fi
+          # Debian package versions must start with a digit. Strip 'v'.
           VERSION=${VERSION#v}
           echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
           echo "Building version: ${VERSION}"
 
       - name: Update debian changelog
         run: |
-          cat > debian/changelog << EOF
-          upload-recordings (${{ steps.version.outputs.VERSION }}) unstable; urgency=medium
+          cat > debian/changelog <<EOF
+          upload-recordings (${{ steps.version.outputs.VERSION }}) bookworm; urgency=medium
 
             * Release ${{ steps.version.outputs.VERSION }}
 
            -- Dave Horton <daveh@beachdognet.com>  $(date -R)
           EOF
+          head -3 debian/changelog
 
       - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential \
             devscripts \
             debhelper \
@@ -54,7 +94,6 @@ jobs:
             libfmt-dev \
             libssl-dev \
             libcurl4-openssl-dev \
-            libunwind-dev \
             libgoogle-perftools-dev \
             libboost-all-dev \
             libev-dev
@@ -65,13 +104,41 @@ jobs:
 
       - name: Prepare artifacts
         run: |
-          cp ../upload-recordings*.deb .
-          ls -la upload-recordings*.deb
+          mkdir -p artifacts
+          cp ../upload-recordings_*.deb artifacts/ 2>/dev/null || true
+          cd artifacts
+          for d in *.deb; do
+            sha256sum "$d" > "${d}.sha256"
+          done
+          ls -lh
+
+      - name: Upload to S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_S3_REGION }}
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+        run: |
+          # Trim any trailing whitespace/newline from the bucket value
+          # (GitHub secrets sometimes get saved with stray whitespace).
+          BUCKET=$(printf '%s' "$AWS_S3_BUCKET" | tr -d '[:space:]')
+          aws s3 cp artifacts/ "s3://${BUCKET}/upload-recordings/" \
+              --recursive --include "*.deb" --include "*.sha256"
 
       - name: Upload to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: upload-recordings_*.deb
+          files: artifacts/*.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Trigger apt repo refresh
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          curl -fsSL -X POST \
+            -H "Authorization: Bearer ${{ secrets.APT_REPO_PAT }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/jambonz/apt-repo/dispatches \
+            -d '{"event_type":"package-uploaded","client_payload":{"repo":"${{ github.repository }}","tag":"${{ github.ref_name }}"}}'
