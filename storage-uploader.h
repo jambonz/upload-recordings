@@ -105,8 +105,13 @@ protected:
     std::chrono::system_clock::time_point audioStartTime_;
     bool audioStartTimeSet_ = false;
 
+    std::string uploadFolder_;
     std::string tempFilePath_;
     std::ofstream tempFile_;
+
+    // Create a mkstemp-compatible temp file in uploadFolder_ and return its fd and path.
+    // Returns -1 on failure.
+    int createMkstempFile(const std::string& prefix, std::string& outPath);
 
     // weak reference to the session so we can trigger its destruction after upload completion
     std::weak_ptr<Session> sessionRef_;

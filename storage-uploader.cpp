@@ -14,6 +14,7 @@ void StorageUploader::createTempFile(const std::string& uploadFolder) {
     try {
         // Determine the directory for the temp file
         fs::path tempDir = uploadFolder.empty() ? fs::temp_directory_path() : fs::path(uploadFolder);
+        uploadFolder_ = tempDir.string();
 
         // Generate a unique file name using the static atomic counter
         int counterValue = uniqueCounter.fetch_add(1, std::memory_order_relaxed);
@@ -127,4 +128,15 @@ std::string StorageUploader::stampAndSerializeSessionSummary(const std::string& 
     }
 
     return json.View().WriteCompact();
+}
+
+int StorageUploader::createMkstempFile(const std::string& prefix, std::string& outPath) {
+    std::string templatePath = (fs::path(uploadFolder_) / (prefix + "-XXXXXX")).string();
+    std::vector<char> buf(templatePath.begin(), templatePath.end());
+    buf.push_back('\0');
+    int fd = mkstemp(buf.data());
+    if (fd != -1) {
+        outPath.assign(buf.data());
+    }
+    return fd;
 }

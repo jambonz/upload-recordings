@@ -185,8 +185,8 @@ void GoogleUploader::finalizeUpload() {
     log_->info("Encoding PCM data to MP3 format using streaming");
     
     // Create a unique temporary file for the MP3
-    char mp3TempFilePath[] = "/tmp/uploads/mp3file-XXXXXX";
-    int mp3TempFd = mkstemp(mp3TempFilePath);
+    std::string mp3TempPath;
+    int mp3TempFd = createMkstempFile("mp3file", mp3TempPath);
     if (mp3TempFd == -1) {
       log_->error("Failed to create unique MP3 temporary file using mkstemp: {}", std::strerror(errno));
       upload_failed_ = true;
@@ -194,46 +194,46 @@ void GoogleUploader::finalizeUpload() {
       return;
     }
     close(mp3TempFd); // Close the descriptor as we'll use the encoder's file methods
-    
+
     try {
       // Create streaming MP3 encoder with metadata parameters
       // Using 2 channels and 128 kbps as before
       StreamingMp3Encoder encoder(metadata_.sample_rate, 2, 128, log_);
-      
+
       // Get the size of the PCM file for logging
       auto pcmFileSize = std::filesystem::file_size(tempFilePath_);
       log_->info("Starting streaming MP3 encoding of {} bytes of PCM data", pcmFileSize);
-      
+
       // Encode the file using streaming (reads and writes in chunks)
-      encoder.encodeFile(tempFilePath_, mp3TempFilePath);
-      
+      encoder.encodeFile(tempFilePath_, mp3TempPath);
+
       // Get the size of the resulting MP3 file
-      auto mp3FileSize = std::filesystem::file_size(mp3TempFilePath);
-      
+      auto mp3FileSize = std::filesystem::file_size(mp3TempPath);
+
       // Update the final file path to point to the MP3 file
-      finalFilePath = mp3TempFilePath;
+      finalFilePath = mp3TempPath;
       log_->info("Successfully encoded {} bytes of PCM to {} bytes of MP3", pcmFileSize, mp3FileSize);
-      
+
     } catch (const std::exception& e) {
       log_->error("MP3 encoding failed: {}", e.what());
-      std::remove(mp3TempFilePath);
+      std::remove(mp3TempPath.c_str());
       upload_failed_ = true;
       cleanupTempFile();
       return;
     }
   }
   else if (recordFileType_ == RecordFileType::WAV) {
-    char wavTempFilePath[] = "/tmp/uploads/wavfile-XXXXXX";
-    int wavTempFd = mkstemp(wavTempFilePath);
+    std::string wavTempPath;
+    int wavTempFd = createMkstempFile("wavfile", wavTempPath);
     if (wavTempFd == -1) {
       log_->error("Failed to create unique WAV temporary file using mkstemp: {}", std::strerror(errno));
       upload_failed_ = true;
       cleanupTempFile();
       return;
     }
-    std::ofstream wavTempFile(wavTempFilePath, std::ios::binary);
+    std::ofstream wavTempFile(wavTempPath, std::ios::binary);
     if (!wavTempFile) {
-      log_->error("Failed to open WAV temporary file: {}", wavTempFilePath);
+      log_->error("Failed to open WAV temporary file: {}", wavTempPath);
       close(wavTempFd);
       upload_failed_ = true;
       cleanupTempFile();
@@ -248,7 +248,7 @@ void GoogleUploader::finalizeUpload() {
     // Write the header.
     wavTempFile.write(wavHeader.data(), wavHeader.size());
     if (!wavTempFile.good()) {
-      log_->error("Failed to write WAV header to temporary file: {}", wavTempFilePath);
+      log_->error("Failed to write WAV header to temporary file: {}", wavTempPath);
       close(wavTempFd);
       upload_failed_ = true;
       cleanupTempFile();
@@ -267,8 +267,8 @@ void GoogleUploader::finalizeUpload() {
     wavTempFile.close();
     rawAudioFile.close();
     close(wavTempFd);
-    log_->info("WAV file created with header at: {}", wavTempFilePath);
-    finalFilePath = wavTempFilePath;
+    log_->info("WAV file created with header at: {}", wavTempPath);
+    finalFilePath = wavTempPath;
   }
 
   // Initiate a resumable upload session.
