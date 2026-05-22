@@ -8,14 +8,22 @@ DEPS_DIR = $(CURDIR)/deps-build
 
 override_dh_auto_configure:
 	mkdir -p $(DEPS_DIR)
-	# Build libwebsockets v4.3.3 from source with libev support
+	# Build libwebsockets v4.3.3 from source with libev support.
+	# LWS_WITH_EVLIB_PLUGINS=OFF links the libev event-loop support
+	# directly into libwebsockets.so. The default (ON, on Unix) builds
+	# libwebsockets-evlib_ev.so as a runtime-dlopened plugin that lws
+	# discovers via scandir() on a hardcoded LWS_INSTALL_LIBDIR path
+	# baked in at build time — which doesn't exist on customer boxes
+	# and isn't fixable via ld.so.conf, since lws bypasses the dynamic
+	# linker for plugin discovery.
 	cd $(DEPS_DIR) && \
 		git clone https://github.com/warmcat/libwebsockets.git -b v4.3.3 --depth 1 && \
 		cd libwebsockets/lib/roles/ws && \
 		patch ops-ws.c < $(CURDIR)/ops-ws.c.patch && \
 		cd $(DEPS_DIR)/libwebsockets && \
 		mkdir -p build && cd build && \
-		cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLWS_WITH_NETLINK=OFF -DLWS_WITH_LIBEV=1 && \
+		cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLWS_WITH_NETLINK=OFF \
+		         -DLWS_WITH_LIBEV=1 -DLWS_WITH_EVLIB_PLUGINS=OFF && \
 		$(MAKE) && sudo make install
 	# Build AWS SDK C++ v1.11.500 from source
 	cd $(DEPS_DIR) && \
