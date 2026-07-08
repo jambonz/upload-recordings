@@ -55,11 +55,17 @@ std::shared_ptr<Aws::S3Crt::S3CrtClient> S3ClientManager::getClient(
                  std::string(credentials.GetAWSAccessKeyId().c_str()).substr(0, 8),
                  maxConnections);
     
-    auto config = createConfig(region, customEndpoint, maxConnections);
-    
+    // useVirtualAddressing must be passed to the S3CrtClient constructor below;
+    // setting it only on the ClientConfiguration is ignored by the CRT client
+    // (aws-sdk-cpp issue #2500), which is why path-style never took effect.
+    bool useVirtualAddressing = true;
+    auto config = createConfig(region, customEndpoint, maxConnections, useVirtualAddressing);
+
     auto client = std::make_shared<Aws::S3Crt::S3CrtClient>(
         Aws::MakeShared<Aws::Auth::SimpleAWSCredentialsProvider>("S3ClientManager", credentials),
-        config
+        config,
+        Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
+        useVirtualAddressing
     );
     
     clients_[key] = client;
@@ -72,8 +78,14 @@ std::shared_ptr<Aws::S3Crt::S3CrtClient> S3ClientManager::getClient(
 Aws::S3Crt::ClientConfiguration S3ClientManager::createConfig(
     const Aws::String& region,
     const Aws::String& customEndpoint,
-    int maxConnections
+    int maxConnections,
+    bool& useVirtualAddressing
 ) {
+    // Default to virtual-hosted addressing (matches AWS S3 behaviour); only
+    // flipped to path-style below for localhost or configured S3-compatible
+    // endpoints. The caller passes this to the S3CrtClient constructor.
+    useVirtualAddressing = true;
+
     Aws::S3Crt::ClientConfiguration config;
     config.region = region;
     config.maxConnections = maxConnections;  // This is shared across all sessions using this client
@@ -109,10 +121,8 @@ Aws::S3Crt::ClientConfiguration S3ClientManager::createConfig(
         }
         
         config.endpointOverride = endpoint;
-        
-        // Determine virtual addressing based on endpoint
-        bool useVirtualAddressing = true;
 
+        // Determine virtual addressing based on endpoint (writes the out-param)
         // Always use path-style for localhost
         if (endpoint.find("localhost") != std::string::npos ||
             endpoint.find("127.0.0.1") != std::string::npos) {

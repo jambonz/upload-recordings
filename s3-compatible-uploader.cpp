@@ -20,63 +20,17 @@ S3CompatibleUploader::S3CompatibleUploader(const std::shared_ptr<Session>& sessi
     const Aws::String& bucketName,
     const Aws::String& customEndpoint)
     : StorageUploader(session), bucketName_(bucketName), region_(region), recordFileType_(ftype) {
-    Aws::S3Crt::ClientConfiguration config;
-    config.region = region;
-    
-    // Use configurable AWS connection count instead of hardcoded value
-    config.maxConnections = Session::getAwsMaxConnections();
-    
-    // Add connection settings
-    config.connectTimeoutMs = 3000;  // 3 seconds
-    config.requestTimeoutMs = 30000; // 30 seconds
-    config.enableTcpKeepAlive = true;
-    config.tcpKeepAliveIntervalMs = 30000;
-    
-    // Use standard retry strategy
-    config.retryStrategy = Aws::MakeShared<Aws::Client::StandardRetryStrategy>("S3CrtClient", 3);
-
-    // Additional settings for S3 compatibility
-    config.scheme = Aws::Http::Scheme::HTTPS;
-    config.verifySSL = true;
-    config.followRedirects = Aws::Client::FollowRedirectsPolicy::ALWAYS;
-    config.enableEndpointDiscovery = false;
-
     setLogger(log);
 
+    // The S3 client — including addressing style, TLS, retry and connection
+    // settings — is built and cached by S3ClientManager::getClient() below.
+    // Do not configure a ClientConfiguration here: it would be ignored.
     if (!customEndpoint.empty()) {
-        // Construct the proper endpoint URL
-        std::string endpoint = customEndpoint;
-        if (endpoint.back() == '/') {
-            endpoint.pop_back();
-        }
-        
-        // Remove any protocol prefix if present
-        if (endpoint.find("https://") == 0) {
-            endpoint = endpoint.substr(8);
-        } else if (endpoint.find("http://") == 0) {
-            endpoint = endpoint.substr(7);
-        }
-        
-        config.endpointOverride = endpoint;
-        
-        // Determine if we should use virtual addressing based on the endpoint
-        // Some services like Hetzner require it, while others like MinIO don't
-        bool useVirtualAddressing = true;
-        
-        // Check for known services that don't use virtual addressing
-        if (endpoint.find("minio") != std::string::npos || 
-            endpoint.find("localhost") != std::string::npos ||
-            endpoint.find("127.0.0.1") != std::string::npos) {
-            useVirtualAddressing = false;
-        }
-        
-        config.useVirtualAddressing = useVirtualAddressing;
-        
-        log_->info("Creating S3 compatible uploader for bucket:{}, endpoint:{}, max connections:{}", 
-                   bucketName, endpoint, config.maxConnections);
+        log_->info("Creating S3 compatible uploader for bucket:{}, endpoint:{}, max connections:{}",
+                   bucketName, customEndpoint, Session::getAwsMaxConnections());
     } else {
-        log_->info("Creating S3 uploader for bucket: {} in region {}, max connections: {}", 
-                   bucketName, region, config.maxConnections);
+        log_->info("Creating S3 uploader for bucket: {} in region {}, max connections: {}",
+                   bucketName, region, Session::getAwsMaxConnections());
     }
 
     s3CrtClient_ = S3ClientManager::getInstance().getClient(
