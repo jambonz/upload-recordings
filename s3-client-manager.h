@@ -71,11 +71,15 @@ private:
     mutable std::mutex mutex_;
     std::unordered_map<ClientKey, std::shared_ptr<Aws::S3Crt::S3CrtClient>, ClientKeyHash> clients_;
     
-    // Helper to create client configuration
+    // Helper to create client configuration. Also reports, via the
+    // useVirtualAddressing out-param, the addressing style that must be passed
+    // to the S3CrtClient constructor (the ClientConfiguration field alone is
+    // ignored by the CRT client — see aws-sdk-cpp issue #2500).
     Aws::S3Crt::ClientConfiguration createConfig(
         const Aws::String& region,
         const Aws::String& customEndpoint,
-        int maxConnections
+        int maxConnections,
+        bool& useVirtualAddressing
     );
 };
 
