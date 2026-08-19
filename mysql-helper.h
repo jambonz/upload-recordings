@@ -16,6 +16,7 @@
 struct RecordCredentials {
     std::string recordFormat;
     std::string bucketCredential;
+    std::string evalCredential; // encrypted; empty/NULL means the call-eval integration is off
 };
 
 class MySQLHelper {

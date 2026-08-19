@@ -236,8 +236,13 @@ bool AzureUploader::upload(std::vector<char>& data, bool isFinalChunk) {
 
     // Upload session summary if available
     if (hasSessionSummary()) {
-      uploadSessionSummary(objectKey_);
+      sessionSummaryUploaded_ = uploadSessionSummary(objectKey_);
     }
+
+    // Notify a call-evaluation vendor (Roark, ...), if configured, now that the recording
+    // (and session.json, if any) have landed. Must run before cleanupTempFile(), which
+    // destroys the session and this uploader.
+    postUploadHook(objectKey_);
 
     // If we created a new WAV or MP3 file, delete it.
     if (recordFileType_ == RecordFileType::WAV || recordFileType_ == RecordFileType::MP3) {
@@ -478,10 +483,10 @@ size_t AzureUploader::writeCallback(void* contents, size_t size, size_t nmemb, v
     return size * nmemb;
 }
 
-void AzureUploader::uploadSessionSummary(const std::string& recordingKey) {
+bool AzureUploader::uploadSessionSummary(const std::string& recordingKey) {
     try {
         std::string body = stampAndSerializeSessionSummary(recordingKey);
-        if (body.empty()) return;
+        if (body.empty()) return false;
 
         std::string sessionKey = createSessionJsonPath(metadata_.call_sid);
         log_->info("Uploading session.json to Azure: {}", sessionKey);
@@ -515,17 +520,19 @@ void AzureUploader::uploadSessionSummary(const std::string& recordingKey) {
 
         if (res != CURLE_OK) {
             log_->error("Failed to upload session.json to Azure: {}", curl_easy_strerror(res));
-            return;
+            return false;
         }
 
         long httpCode = 0;
         curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &httpCode);
         if (httpCode == 201) {
             log_->info("session.json uploaded successfully to Azure: {}", sessionKey);
-        } else {
-            log_->error("session.json upload to Azure failed with HTTP code: {}", httpCode);
+            return true;
         }
+        log_->error("session.json upload to Azure failed with HTTP code: {}", httpCode);
+        return false;
     } catch (const std::exception& e) {
         log_->error("Exception uploading session.json to Azure: {}", e.what());
+        return false;
     }
 }

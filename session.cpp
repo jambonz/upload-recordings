@@ -230,6 +230,32 @@ void Session::processMetadata() {
               storageUploader_->setMetadata(metadata_);
           }
         }
+
+        // Call-evaluation (Roark, ...) credential: an empty/NULL column means the
+        // integration is off for this account -- the overwhelmingly common case, so
+        // nothing further is decrypted/parsed/allocated when it's empty.
+        if (storageUploader_ && !recordCredentials_->evalCredential.empty()) {
+            try {
+                std::string decryptedEvalCredential = cryptoHelper_.decrypt(recordCredentials_->evalCredential);
+                yyjson_doc* evalDoc = yyjson_read(decryptedEvalCredential.c_str(), decryptedEvalCredential.size(), 0);
+                if (evalDoc) {
+                    yyjson_val* evalJson = yyjson_doc_get_root(evalDoc);
+                    yyjson_val* vendor = yyjson_obj_get(evalJson, "vendor");
+                    yyjson_val* apiKey = yyjson_obj_get(evalJson, "api_key");
+                    if (vendor && yyjson_is_str(vendor) && apiKey && yyjson_is_str(apiKey)) {
+                        storageUploader_->setEvalCredential(yyjson_get_str(vendor), yyjson_get_str(apiKey));
+                        log_->info("Call-evaluation integration enabled (vendor: {})", yyjson_get_str(vendor));
+                    } else {
+                        log_->warn("eval_credential is missing vendor or api_key; call-evaluation disabled");
+                    }
+                    yyjson_doc_free(evalDoc);
+                } else {
+                    log_->error("Failed to parse eval_credential JSON");
+                }
+            } catch (const std::exception& e) {
+                log_->error("Failed to decrypt eval_credential: {}", e.what());
+            }
+        }
     } catch (const std::exception &e) {
         log_->error("Failed to fetch or decrypt record credentials: {}", e.what());
     }
@@ -488,8 +514,8 @@ void Session::parseMetadata(yyjson_val* json) {
 std::unique_ptr<StorageUploader> Session::createStorageUploader(RecordFileType ftype) {
   try {
     switch (storage_service_) {
-      case StorageService::AWS_S3:
-        return std::make_unique<S3CompatibleUploader>(
+      case StorageService::AWS_S3: {
+        auto uploader = std::make_unique<S3CompatibleUploader>(
           shared_from_this(),
           log_,
           uploadFolder_,
@@ -498,9 +524,14 @@ std::unique_ptr<StorageUploader> Session::createStorageUploader(RecordFileType f
           region_,
           bucket_name_
         );
+        // Presign info for the eval-notify hook (aws_s3/s3_compatible only -- see
+        // StorageUploader::postUploadHook). No custom endpoint for plain AWS S3.
+        uploader->setPresignInfo(Aws::Auth::AWSCredentials(access_key_, secret_key_), region_, bucket_name_, "");
+        return uploader;
+      }
 
-      case StorageService::S3_COMPATIBLE:
-        return std::make_unique<S3CompatibleUploader>(
+      case StorageService::S3_COMPATIBLE: {
+        auto uploader = std::make_unique<S3CompatibleUploader>(
           shared_from_this(),
           log_,
           uploadFolder_,
@@ -510,6 +541,10 @@ std::unique_ptr<StorageUploader> Session::createStorageUploader(RecordFileType f
           bucket_name_,
           custom_endpoint_
         );
+        uploader->setPresignInfo(Aws::Auth::AWSCredentials(access_key_, secret_key_), region_, bucket_name_,
+                                  custom_endpoint_);
+        return uploader;
+      }
       case StorageService::AZURE_CLOUD_STORAGE:
         return std::make_unique<AzureUploader>(
           shared_from_this(),

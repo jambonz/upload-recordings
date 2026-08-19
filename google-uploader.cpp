@@ -291,7 +291,14 @@ void GoogleUploader::finalizeUpload() {
 
   // Upload session summary if available
   if (!upload_failed_ && hasSessionSummary()) {
-    uploadSessionSummary(objectKey_);
+    sessionSummaryUploaded_ = uploadSessionSummary(objectKey_);
+  }
+
+  // Notify a call-evaluation vendor (Roark, ...), if configured, now that the recording
+  // (and session.json, if any) have landed. Must run before cleanupTempFile(), which
+  // destroys the session and this uploader.
+  if (!upload_failed_) {
+    postUploadHook(objectKey_);
   }
 
   // If we created a new WAV or MP3 file, delete it.
@@ -525,9 +532,9 @@ size_t GoogleUploader::writeCallback(void* contents, size_t size, size_t nmemb, 
     return totalSize;
 }
 
-void GoogleUploader::uploadSessionSummary(const std::string& recordingKey) {
+bool GoogleUploader::uploadSessionSummary(const std::string& recordingKey) {
     std::string body = stampAndSerializeSessionSummary(recordingKey);
-    if (body.empty()) return;
+    if (body.empty()) return false;
 
     std::string sessionKey = createSessionJsonPath(metadata_.call_sid);
     log_->info("Uploading session.json to GCS: {}", sessionKey);
@@ -536,7 +543,7 @@ void GoogleUploader::uploadSessionSummary(const std::string& recordingKey) {
         accessToken_ = generateOAuthToken();
         if (accessToken_.empty()) {
             log_->error("Failed to get OAuth token for session.json upload");
-            return;
+            return false;
         }
     }
 
@@ -546,7 +553,7 @@ void GoogleUploader::uploadSessionSummary(const std::string& recordingKey) {
     CURL* curl = curl_easy_init();
     if (!curl) {
         log_->error("Failed to initialize CURL for session.json upload");
-        return;
+        return false;
     }
 
     struct curl_slist* headers = nullptr;
@@ -556,6 +563,7 @@ void GoogleUploader::uploadSessionSummary(const std::string& recordingKey) {
         if (headers) curl_slist_free_all(headers);
     };
 
+    bool success = false;
     try {
         std::string responseBody;
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
@@ -578,6 +586,7 @@ void GoogleUploader::uploadSessionSummary(const std::string& recordingKey) {
             curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
             if (httpCode == 200) {
                 log_->info("session.json uploaded successfully to GCS: {}", sessionKey);
+                success = true;
             } else {
                 log_->error("session.json upload to GCS failed with HTTP code: {}", httpCode);
             }
@@ -587,4 +596,5 @@ void GoogleUploader::uploadSessionSummary(const std::string& recordingKey) {
     }
 
     cleanup();
+    return success;
 }
