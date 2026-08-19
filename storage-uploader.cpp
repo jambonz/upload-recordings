@@ -137,6 +137,12 @@ void StorageUploader::postUploadHook(const std::string& recordingKey) {
         return; // call-eval integration off for this account -- nothing to do
     }
 
+    if (!shouldSampleCall(metadata_.call_sid, evalSamplingPercent_)) {
+        log_->debug("postUploadHook: call {} not selected by the {}% sample -- skipping",
+                    metadata_.call_sid, evalSamplingPercent_);
+        return;
+    }
+
     try {
         auto notifier = EvalNotifier::create(evalVendor_);
         if (!notifier) {

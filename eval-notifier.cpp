@@ -208,6 +208,19 @@ private:
 
 } // namespace
 
+bool shouldSampleCall(const std::string& callSid, int samplingPercent) {
+    if (samplingPercent >= 100) return true;
+    if (samplingPercent <= 0) return false;
+    if (callSid.empty()) return true; // cannot decide deterministically -- fail open
+
+    uint64_t hash = 14695981039346656037ULL; // FNV-1a 64-bit offset basis
+    for (unsigned char c : callSid) {
+        hash ^= static_cast<uint64_t>(c);
+        hash *= 1099511628211ULL; // FNV prime
+    }
+    return static_cast<int>(hash % 100) < samplingPercent;
+}
+
 std::string mapEndedStatus(const std::string& terminationReason) {
     static const std::unordered_map<std::string, std::string> kMap = {
         {"caller-hangup", "CUSTOMER_ENDED_CALL"},

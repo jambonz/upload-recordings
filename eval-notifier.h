@@ -49,6 +49,13 @@ struct EvalNotifyContext {
 // MySQLHelper, S3Client, or curl.
 // ---------------------------------------------------------------------------------------
 
+// Deterministic per-call sampling. The same call_sid always yields the same answer, so
+// an operator can explain after the fact why a given call was or was not forwarded --
+// a plain RNG cannot. FNV-1a over the sid spreads the UUID-shaped sids jambonz issues
+// evenly enough across the 100 buckets. Fails open (sends) on an empty sid: dropping a
+// call silently is the worse of the two errors.
+bool shouldSampleCall(const std::string& callSid, int samplingPercent);
+
 // jambonz termination_reason -> Roark endedStatus (best-effort; empty when unmapped).
 std::string mapEndedStatus(const std::string& terminationReason);
 

@@ -243,8 +243,17 @@ void Session::processMetadata() {
                     yyjson_val* vendor = yyjson_obj_get(evalJson, "vendor");
                     yyjson_val* apiKey = yyjson_obj_get(evalJson, "api_key");
                     if (vendor && yyjson_is_str(vendor) && apiKey && yyjson_is_str(apiKey)) {
-                        storageUploader_->setEvalCredential(yyjson_get_str(vendor), yyjson_get_str(apiKey));
-                        log_->info("Call-evaluation integration enabled (vendor: {})", yyjson_get_str(vendor));
+                        // Absent/!int in a credential written before this field existed, and in
+                        // that case the account must keep forwarding every call as it did before.
+                        yyjson_val* sampling = yyjson_obj_get(evalJson, "sampling_percent");
+                        int samplingPercent = (sampling && yyjson_is_int(sampling))
+                            ? static_cast<int>(yyjson_get_int(sampling)) : 100;
+                        if (samplingPercent < 0) samplingPercent = 0;
+                        if (samplingPercent > 100) samplingPercent = 100;
+                        storageUploader_->setEvalCredential(yyjson_get_str(vendor), yyjson_get_str(apiKey),
+                                                            samplingPercent);
+                        log_->info("Call-evaluation integration enabled (vendor: {}, sampling: {}%)",
+                                   yyjson_get_str(vendor), samplingPercent);
                     } else {
                         log_->warn("eval_credential is missing vendor or api_key; call-evaluation disabled");
                     }

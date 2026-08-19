@@ -76,9 +76,11 @@ public:
     // Call-evaluation (Roark, ...) credential, decrypted and parsed by Session. Empty
     // vendor/apiKey means the integration is off for this account -- the overwhelmingly
     // common case, so postUploadHook() must early-return on it with no further work.
-    void setEvalCredential(const std::string& vendor, const std::string& apiKey) {
+    void setEvalCredential(const std::string& vendor, const std::string& apiKey,
+                           int samplingPercent) {
         evalVendor_ = vendor;
         evalApiKey_ = apiKey;
+        evalSamplingPercent_ = samplingPercent;
     }
 
     // Bucket info needed to presign a GET url for the recording. Only called by
@@ -147,6 +149,9 @@ protected:
     // backends only, the bucket info needed to presign a GET url for the recording.
     std::string evalVendor_;
     std::string evalApiKey_;
+    // Percentage of calls forwarded to the vendor. Defaults to "everything" so a
+    // credential stored before this field existed keeps its original behaviour.
+    int evalSamplingPercent_ = 100;
     bool presignInfoSet_ = false;
     Aws::Auth::AWSCredentials presignCredentials_;
     std::string presignRegion_;
