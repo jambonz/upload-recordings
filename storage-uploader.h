@@ -35,6 +35,12 @@ struct Metadata_t {
   std::string application_sid;
   std::string originating_sip_id;
   std::string originating_sip_trunk_name;
+  /* identity fields forwarded to call-eval vendors (EVAL-INTEGRATION-DESIGN.md metadata
+     set); all optional -- older feature-servers may not send them */
+  std::string sip_call_id;
+  std::string caller_name;
+  std::string trace_id;
+  std::string customer_data_json; // the createCall tag, serialized verbatim
   uint32_t sample_rate;
 };
 
@@ -94,6 +100,16 @@ public:
         presignBucket_ = bucket;
         presignEndpoint_ = customEndpoint;
         presignInfoSet_ = true;
+    }
+
+    // GCS variant: a V4 signed URL is built from the account's service-account key
+    // (see gcs-presigner.h). Set by Session::createStorageUploader for google buckets.
+    void setGcsPresignInfo(const std::string& bucket, const std::string& clientEmail,
+                            const std::string& privateKeyPem) {
+        gcsPresignBucket_ = bucket;
+        gcsPresignClientEmail_ = clientEmail;
+        gcsPresignPrivateKey_ = privateKeyPem;
+        gcsPresignInfoSet_ = true;
     }
 
 protected:
@@ -157,6 +173,10 @@ protected:
     std::string presignRegion_;
     std::string presignBucket_;
     std::string presignEndpoint_;
+    bool gcsPresignInfoSet_ = false;
+    std::string gcsPresignBucket_;
+    std::string gcsPresignClientEmail_;
+    std::string gcsPresignPrivateKey_;
 
     std::string uploadFolder_;
     std::string tempFilePath_;

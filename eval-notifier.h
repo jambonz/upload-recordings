@@ -20,9 +20,8 @@ struct EvalCredential {
     std::string apiKey;
 };
 
-// Everything needed to build a GET-presigned recording URL. `presignable` is false for
-// google/azure buckets (v1 logs and skips them) and is only ever set true by
-// Session::createStorageUploader() for aws_s3/s3_compatible.
+// Everything needed to build a GET-presigned recording URL. `presignable` is set true by
+// Session::createStorageUploader() for aws_s3/s3_compatible only.
 struct PresignInfo {
     bool presignable = false;
     Aws::Auth::AWSCredentials credentials;
@@ -31,10 +30,20 @@ struct PresignInfo {
     std::string customEndpoint; // empty for plain aws_s3
 };
 
+// The GCS variant: set for google buckets (V4 signed URL from the account's service-account
+// key -- see gcs-presigner.h). Azure remains log-and-skip in v1.
+struct GcsPresignInfo {
+    bool presignable = false;
+    std::string bucket;
+    std::string clientEmail;
+    std::string privateKeyPem;
+};
+
 // Everything the vendor adapter needs, gathered by StorageUploader::postUploadHook().
 struct EvalNotifyContext {
     EvalCredential credential;
     PresignInfo presign;
+    GcsPresignInfo gcsPresign;
     std::string recordingKey; // audio object key, e.g. "2026/08/19/CAxxx.wav"
     Metadata_t metadata;      // call_sid/account_sid/direction/from/to/application_sid
     std::chrono::system_clock::time_point audioStartTime;

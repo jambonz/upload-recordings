@@ -158,6 +158,10 @@ void StorageUploader::postUploadHook(const std::string& recordingKey) {
         ctx.presign.region = presignRegion_;
         ctx.presign.bucket = presignBucket_;
         ctx.presign.customEndpoint = presignEndpoint_;
+        ctx.gcsPresign.presignable = gcsPresignInfoSet_;
+        ctx.gcsPresign.bucket = gcsPresignBucket_;
+        ctx.gcsPresign.clientEmail = gcsPresignClientEmail_;
+        ctx.gcsPresign.privateKeyPem = gcsPresignPrivateKey_;
         ctx.recordingKey = recordingKey;
         ctx.metadata = metadata_;
         ctx.audioStartTime = audioStartTime_;

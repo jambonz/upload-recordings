@@ -1,6 +1,9 @@
 #include "eval-notifier.h"
 #include "connection-manager.h"
 #include "s3-client-manager.h"
+#include "gcs-presigner.h"
+#include "coval-mapper.h"
+#include "influx-alert.h"
 
 #include <aws/core/Aws.h>
 #include <aws/s3/S3Client.h>
@@ -23,7 +26,11 @@ constexpr long EVAL_POST_CONNECT_TIMEOUT_SECS = 3;
 constexpr long EVAL_POST_TOTAL_TIMEOUT_SECS = 10;
 constexpr long long PRESIGN_EXPIRATION_SECS = 3600;
 constexpr const char* ROARK_CALL_URL = "https://api.roark.ai/v1/call";
+constexpr const char* COVAL_SUBMIT_URL = "https://api.coval.dev/v1/conversations:submit";
 constexpr size_t ERROR_BODY_TRUNCATE_LEN = 500;
+constexpr size_t COVAL_MAX_BODY_BYTES = 250 * 1024;  // vendor rejects >256 KB; keep headroom
+constexpr int64_t COVAL_MIN_AUDIO_SECS = 5;          // vendor rejects shorter recordings
+constexpr const char* EVAL_ALERT_TYPE = "eval-post-failure";
 
 size_t collectResponseBody(char* ptr, size_t size, size_t nmemb, void* userdata) {
     auto* out = static_cast<std::string*>(userdata);
@@ -47,9 +54,10 @@ std::string isoFromSystemClock(std::chrono::system_clock::time_point tp) {
 }
 
 // Fresh curl_easy_init() handle per request; one attempt, no retry machinery (matches
-// this repo's uniform log-and-continue error style for vendor calls).
-bool postToRoark(const std::string& apiKey, const std::string& body,
-                  long& httpCodeOut, std::string& errorOut) {
+// this repo's uniform log-and-continue error style for vendor calls). Each vendor supplies
+// its own auth header (Roark: Authorization Bearer; Coval: X-API-Key).
+bool postJson(const char* url, const std::vector<std::string>& extraHeaders,
+              const std::string& body, long& httpCodeOut, std::string& errorOut) {
     CURL* curl = curl_easy_init();
     if (!curl) {
         errorOut = "curl_easy_init failed";
@@ -57,11 +65,13 @@ bool postToRoark(const std::string& apiKey, const std::string& body,
     }
 
     struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, ("Authorization: Bearer " + apiKey).c_str());
+    for (const auto& h : extraHeaders) {
+        headers = curl_slist_append(headers, h.c_str());
+    }
     headers = curl_slist_append(headers, "Content-Type: application/json");
 
     std::string responseBody;
-    curl_easy_setopt(curl, CURLOPT_URL, ROARK_CALL_URL);
+    curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
@@ -91,29 +101,66 @@ bool postToRoark(const std::string& apiKey, const std::string& body,
     return success;
 }
 
-std::string presignRecordingUrl(const PresignInfo& info, const std::string& key,
+std::string presignRecordingUrl(const EvalNotifyContext& ctx,
                                  const std::shared_ptr<spdlog::logger>& log) {
-    if (!info.presignable) {
-        log->info("eval-notify: bucket type does not support presigning (google/azure) -- skipping vendor POST");
-        return {};
+    const std::string& key = ctx.recordingKey;
+
+    if (ctx.presign.presignable) {
+        const PresignInfo& info = ctx.presign;
+        try {
+            bool useVirtualAddressing = true;
+            auto config = buildPresignClientConfig(info.region, info.customEndpoint, useVirtualAddressing);
+
+            Aws::S3::S3Client client(
+                Aws::MakeShared<Aws::Auth::SimpleAWSCredentialsProvider>("EvalNotifier", info.credentials),
+                config,
+                Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
+                useVirtualAddressing
+            );
+
+            return client.GeneratePresignedUrl(info.bucket, key, Aws::Http::HttpMethod::HTTP_GET,
+                                                PRESIGN_EXPIRATION_SECS);
+        } catch (const std::exception& e) {
+            log->error("eval-notify: failed to presign recording URL for key '{}': {}", key, e.what());
+            return {};
+        }
     }
 
-    try {
-        bool useVirtualAddressing = true;
-        auto config = buildPresignClientConfig(info.region, info.customEndpoint, useVirtualAddressing);
+    if (ctx.gcsPresign.presignable) {
+        try {
+            return generateGcsV4SignedUrl(ctx.gcsPresign.bucket, key, ctx.gcsPresign.clientEmail,
+                                           ctx.gcsPresign.privateKeyPem, PRESIGN_EXPIRATION_SECS,
+                                           std::chrono::system_clock::now());
+        } catch (const std::exception& e) {
+            log->error("eval-notify: failed to build GCS signed URL for key '{}': {}", key, e.what());
+            return {};
+        }
+    }
 
-        Aws::S3::S3Client client(
-            Aws::MakeShared<Aws::Auth::SimpleAWSCredentialsProvider>("EvalNotifier", info.credentials),
-            config,
-            Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
-            useVirtualAddressing
-        );
+    log->info("eval-notify: bucket type does not support presigning (azure) -- skipping vendor POST");
+    return {};
+}
 
-        return client.GeneratePresignedUrl(info.bucket, key, Aws::Http::HttpMethod::HTTP_GET,
-                                            PRESIGN_EXPIRATION_SECS);
-    } catch (const std::exception& e) {
-        log->error("eval-notify: failed to presign recording URL for key '{}': {}", key, e.what());
-        return {};
+// Every vendor POST failure becomes a portal alert (EVAL-INTEGRATION-DESIGN.md §5.5): the
+// account owner configured this integration and has no shell access, so the alert carries
+// enough to troubleshoot -- vendor, http status or curl error, response excerpt, call sid,
+// recording key.
+void writeEvalFailureAlert(const std::shared_ptr<spdlog::logger>& log, const std::string& vendor,
+                            const EvalNotifyContext& ctx, long httpCode, const std::string& errorDetail) {
+    std::ostringstream detail;
+    detail << "call_sid=" << ctx.metadata.call_sid
+           << " recording_key=" << ctx.recordingKey
+           << " http=" << httpCode
+           << " error=" << errorDetail;
+    const int64_t tsNanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    sendInfluxAlert(log, buildAlertLine(ctx.metadata.account_sid, EVAL_ALERT_TYPE, vendor,
+        "Failed posting call data to " + vendor + " for evaluation", detail.str(), tsNanos));
+}
+
+void bumpEvalCounter(bool success) {
+    if (auto* statsd = ConnectionManager::getStatsdClient()) {
+        statsd->increment(success ? "recording.eval_notify.success" : "recording.eval_notify.failure");
     }
 }
 
@@ -121,7 +168,7 @@ class RoarkNotifier : public EvalNotifier {
 public:
     void notify(std::shared_ptr<spdlog::logger> log, const EvalNotifyContext& ctx) override {
         try {
-            std::string recordingUrl = presignRecordingUrl(ctx.presign, ctx.recordingKey, log);
+            std::string recordingUrl = presignRecordingUrl(ctx, log);
             if (recordingUrl.empty()) {
                 // Already logged (unsupported bucket type or presign failure): there is
                 // nothing fetchable to send Roark, so don't POST a broken URL.
@@ -181,7 +228,8 @@ public:
 
             long httpCode = 0;
             std::string errorDetail;
-            bool ok = postToRoark(ctx.credential.apiKey, body, httpCode, errorDetail);
+            bool ok = postJson(ROARK_CALL_URL,
+                {"Authorization: Bearer " + ctx.credential.apiKey}, body, httpCode, errorDetail);
 
             if (ok) {
                 log->info("eval-notify: posted call {} to roark ({} bytes, transcript: {})",
@@ -189,6 +237,7 @@ public:
             } else {
                 log->error("eval-notify: roark POST failed for call {} (vendor: roark, http: {}): {}",
                     ctx.metadata.call_sid, httpCode, errorDetail);
+                writeEvalFailureAlert(log, "roark", ctx, httpCode, errorDetail);
             }
             bumpCounter(ok);
         } catch (const std::exception& e) {
@@ -199,10 +248,233 @@ public:
     }
 
 private:
-    static void bumpCounter(bool success) {
-        if (auto* statsd = ConnectionManager::getStatsdClient()) {
-            statsd->increment(success ? "recording.eval_notify.success" : "recording.eval_notify.failure");
+    static void bumpCounter(bool success) { bumpEvalCounter(success); }
+};
+
+class CovalNotifier : public EvalNotifier {
+public:
+    void notify(std::shared_ptr<spdlog::logger> log, const EvalNotifyContext& ctx) override {
+        yyjson_doc* summaryDoc = nullptr;
+        try {
+            std::string recordingUrl = presignRecordingUrl(ctx, log);
+            if (recordingUrl.empty()) {
+                // v1 always sends audio (transcript-only submissions were deliberately
+                // deferred); nothing presignable means nothing to send.
+                bumpEvalCounter(false);
+                return;
+            }
+
+            using Aws::Utils::Json::JsonValue;
+
+            CovalCallInputs in;
+            in.audioUrl = recordingUrl;
+            in.externalConversationId = ctx.metadata.call_sid;
+
+            // Identity metadata: stable, documented key names -- customers build Coval
+            // conditional metric rules on these. 'call_id' and 'trace_id' are reserved by
+            // Coval, hence sip_call_id / jambonz_trace_id.
+            JsonValue meta;
+            meta.WithString("call_sid", ctx.metadata.call_sid);
+            meta.WithString("account_sid", ctx.metadata.account_sid);
+            if (!ctx.metadata.application_sid.empty()) {
+                meta.WithString("application_sid", ctx.metadata.application_sid);
+            }
+            if (!ctx.metadata.direction.empty()) meta.WithString("direction", ctx.metadata.direction);
+            if (!ctx.metadata.from.empty()) meta.WithString("from", ctx.metadata.from);
+            if (!ctx.metadata.to.empty()) meta.WithString("to", ctx.metadata.to);
+            if (!ctx.metadata.caller_name.empty()) meta.WithString("caller_name", ctx.metadata.caller_name);
+            if (!ctx.metadata.trace_id.empty()) meta.WithString("jambonz_trace_id", ctx.metadata.trace_id);
+            std::string sipCallId = ctx.metadata.sip_call_id;
+
+            if (!ctx.stampedSessionSummaryJson.empty()) {
+                summaryDoc = yyjson_read(ctx.stampedSessionSummaryJson.c_str(),
+                                          ctx.stampedSessionSummaryJson.size(), 0);
+            }
+
+            if (summaryDoc) {
+                yyjson_val* root = yyjson_doc_get_root(summaryDoc);
+
+                yyjson_val* duration = yyjson_obj_get(root, "duration_sec");
+                if (duration && yyjson_is_num(duration) &&
+                    yyjson_get_sint(duration) < COVAL_MIN_AUDIO_SECS) {
+                    log->info("eval-notify: call {} is shorter than coval's {}s minimum -- skipping",
+                        ctx.metadata.call_sid, COVAL_MIN_AUDIO_SECS);
+                    yyjson_doc_free(summaryDoc);
+                    bumpEvalCounter(false);
+                    return;
+                }
+                if (duration && yyjson_is_num(duration)) {
+                    meta.WithInt64("duration_sec", yyjson_get_sint(duration));
+                }
+
+                yyjson_val* callStart = yyjson_obj_get(root, "call_start");
+                if (callStart && yyjson_is_str(callStart)) in.occurredAt = yyjson_get_str(callStart);
+
+                if (sipCallId.empty()) {
+                    yyjson_val* sipCid = yyjson_obj_get(root, "sip_call_id");
+                    if (sipCid && yyjson_is_str(sipCid)) sipCallId = yyjson_get_str(sipCid);
+                }
+
+                yyjson_val* term = yyjson_obj_get(root, "termination_reason");
+                if (term && yyjson_is_str(term)) meta.WithString("termination_reason", yyjson_get_str(term));
+
+                addAgentMetadata(root, meta);
+                addOutcomeMetadata(root, meta);
+
+                int64_t recordingStartedAtMs = 0;
+                yyjson_val* recStartedAt = yyjson_obj_get(root, "recording_started_at_ms");
+                if (recStartedAt && yyjson_is_num(recStartedAt)) {
+                    recordingStartedAtMs = yyjson_get_sint(recStartedAt);
+                }
+                in.transcript = mapTranscript(root, recordingStartedAtMs);
+
+                yyjson_doc_free(summaryDoc);
+                summaryDoc = nullptr;
+            }
+
+            if (!sipCallId.empty()) meta.WithString("sip_call_id", sipCallId);
+            if (in.occurredAt.empty() && ctx.audioStartTimeSet) {
+                in.occurredAt = isoFromSystemClock(ctx.audioStartTime);
+            }
+            addCustomerData(ctx.metadata.customer_data_json, meta, log);
+
+            in.metadata = std::move(meta);
+            std::string body = buildCovalConversation(in, COVAL_MAX_BODY_BYTES);
+
+            long httpCode = 0;
+            std::string errorDetail;
+            bool ok = postJson(COVAL_SUBMIT_URL,
+                {"X-API-Key: " + ctx.credential.apiKey}, body, httpCode, errorDetail);
+
+            if (ok) {
+                log->info("eval-notify: posted call {} to coval ({} bytes, transcript: {} messages)",
+                    ctx.metadata.call_sid, body.size(), in.transcript.size());
+            } else {
+                log->error("eval-notify: coval POST failed for call {} (vendor: coval, http: {}): {}",
+                    ctx.metadata.call_sid, httpCode, errorDetail);
+                writeEvalFailureAlert(log, "coval", ctx, httpCode, errorDetail);
+            }
+            bumpEvalCounter(ok);
+        } catch (const std::exception& e) {
+            if (summaryDoc) yyjson_doc_free(summaryDoc);
+            log->error("eval-notify: unexpected exception notifying coval for call {}: {}",
+                ctx.metadata.call_sid, e.what());
+            bumpEvalCounter(false);
         }
+    }
+
+private:
+    // AI configuration from the first agent[] entry: which STT/TTS/LLM served this call --
+    // the keys customers segment their Coval scores by.
+    static void addAgentMetadata(yyjson_val* root, Aws::Utils::Json::JsonValue& meta) {
+        yyjson_val* agentArr = yyjson_obj_get(root, "agent");
+        if (!agentArr || !yyjson_is_arr(agentArr) || yyjson_arr_size(agentArr) == 0) return;
+        yyjson_val* first = yyjson_arr_get(agentArr, 0);
+
+        yyjson_val* config = yyjson_obj_get(first, "config");
+        if (config && yyjson_is_obj(config)) {
+            static const std::pair<const char*, const char*> kConfigKeys[] = {
+                {"stt_vendor", "stt_vendor"}, {"stt_model", "stt_model"},
+                {"tts_vendor", "tts_vendor"}, {"tts_voice", "tts_voice"},
+                {"llm_vendor", "llm_vendor"}, {"llm_model", "llm_model"},
+                {"turn_detection", "turn_detection"}
+            };
+            for (const auto& [src, dst] : kConfigKeys) {
+                yyjson_val* v = yyjson_obj_get(config, src);
+                if (v && yyjson_is_str(v)) meta.WithString(dst, yyjson_get_str(v));
+            }
+        }
+
+        yyjson_val* latency = yyjson_obj_get(first, "latency_avg");
+        if (latency && yyjson_is_obj(latency)) {
+            static const std::pair<const char*, const char*> kLatencyKeys[] = {
+                {"stt_ms", "avg_stt_ms"}, {"llm_ms", "avg_llm_ms"}, {"tts_ms", "avg_tts_ms"}
+            };
+            for (const auto& [src, dst] : kLatencyKeys) {
+                yyjson_val* v = yyjson_obj_get(latency, src);
+                if (v && yyjson_is_num(v)) meta.WithInt64(dst, yyjson_get_sint(v));
+            }
+        }
+    }
+
+    // Outcome/quality across all agent[] entries + the verb_events timeline.
+    static void addOutcomeMetadata(yyjson_val* root, Aws::Utils::Json::JsonValue& meta) {
+        int64_t bargeIns = 0;
+        int64_t errors = 0;
+        bool transferred = false;
+
+        yyjson_val* agentArr = yyjson_obj_get(root, "agent");
+        if (agentArr && yyjson_is_arr(agentArr)) {
+            yyjson_val* item;
+            yyjson_arr_iter iter = yyjson_arr_iter_with(agentArr);
+            while ((item = yyjson_arr_iter_next(&iter))) {
+                yyjson_val* bi = yyjson_obj_get(item, "barge_in");
+                if (bi && yyjson_is_obj(bi)) {
+                    yyjson_val* confirmed = yyjson_obj_get(bi, "confirmed");
+                    if (confirmed && yyjson_is_num(confirmed)) bargeIns += yyjson_get_sint(confirmed);
+                }
+                yyjson_val* errArr = yyjson_obj_get(item, "errors");
+                if (errArr && yyjson_is_arr(errArr)) errors += yyjson_arr_size(errArr);
+                yyjson_val* result = yyjson_obj_get(item, "result");
+                if (result && yyjson_is_str(result) &&
+                    std::string(yyjson_get_str(result)) == "handoff") {
+                    transferred = true;
+                }
+            }
+        }
+
+        yyjson_val* events = yyjson_obj_get(root, "verb_events");
+        if (events && yyjson_is_arr(events)) {
+            yyjson_val* evt;
+            yyjson_arr_iter iter = yyjson_arr_iter_with(events);
+            while ((evt = yyjson_arr_iter_next(&iter))) {
+                yyjson_val* type = yyjson_obj_get(evt, "type");
+                if (type && yyjson_is_str(type)) {
+                    std::string t = yyjson_get_str(type);
+                    if (t == "sip:refer" || t == "transfer") transferred = true;
+                }
+            }
+        }
+
+        meta.WithInt64("barge_ins_confirmed", bargeIns);
+        meta.WithInt64("error_count", errors);
+        meta.WithBool("transferred", transferred);
+    }
+
+    // Top-level primitives from the createCall tag (customerData) become metadata keys,
+    // skipping names Coval reserves.
+    static void addCustomerData(const std::string& customerDataJson,
+                                 Aws::Utils::Json::JsonValue& meta,
+                                 const std::shared_ptr<spdlog::logger>& log) {
+        if (customerDataJson.empty()) return;
+        yyjson_doc* doc = yyjson_read(customerDataJson.c_str(), customerDataJson.size(), 0);
+        if (!doc) {
+            log->debug("eval-notify: customerData is not parseable JSON -- ignoring");
+            return;
+        }
+        yyjson_val* root = yyjson_doc_get_root(doc);
+        if (root && yyjson_is_obj(root)) {
+            static const char* kReserved[] = {
+                "conversation_id", "external_conversation_id", "call_id", "trace_id",
+                "langfuse_trace_id", "observation_id", "langfuse_observation_id",
+                "project_id", "environment", "occurred_at"
+            };
+            yyjson_obj_iter iter = yyjson_obj_iter_with(root);
+            yyjson_val* key;
+            while ((key = yyjson_obj_iter_next(&iter))) {
+                yyjson_val* val = yyjson_obj_iter_get_val(key);
+                std::string k = yyjson_get_str(key);
+                bool reserved = false;
+                for (const char* r : kReserved) {
+                    if (k == r) { reserved = true; break; }
+                }
+                if (reserved) continue;
+                if (yyjson_is_str(val)) meta.WithString(k, yyjson_get_str(val));
+                else if (yyjson_is_bool(val)) meta.WithBool(k, yyjson_get_bool(val));
+                else if (yyjson_is_num(val)) meta.WithDouble(k, yyjson_get_num(val));
+            }
+        }
+        yyjson_doc_free(doc);
     }
 };
 
@@ -410,6 +682,9 @@ std::string buildRoarkCall(const RoarkCallInputs& in) {
 std::unique_ptr<EvalNotifier> EvalNotifier::create(const std::string& vendor) {
     if (vendor == "roark") {
         return std::make_unique<RoarkNotifier>();
+    }
+    if (vendor == "coval") {
+        return std::make_unique<CovalNotifier>();
     }
     return nullptr;
 }

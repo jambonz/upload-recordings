@@ -517,6 +517,32 @@ void Session::parseMetadata(yyjson_val* json) {
     metadata_.originating_sip_trunk_name = yyjson_get_str(originatingSipTrunkName);
   }
 
+  /* identity fields forwarded to call-eval vendors; optional -- absent from older
+     feature-servers, and absence just means thinner vendor metadata */
+  yyjson_val* sipCallId = yyjson_obj_get(json, "callId");
+  if (sipCallId && yyjson_is_str(sipCallId)) {
+    metadata_.sip_call_id = yyjson_get_str(sipCallId);
+  }
+
+  yyjson_val* callerName = yyjson_obj_get(json, "callerName");
+  if (callerName && yyjson_is_str(callerName)) {
+    metadata_.caller_name = yyjson_get_str(callerName);
+  }
+
+  yyjson_val* traceId = yyjson_obj_get(json, "traceId");
+  if (traceId && yyjson_is_str(traceId)) {
+    metadata_.trace_id = yyjson_get_str(traceId);
+  }
+
+  yyjson_val* customerData = yyjson_obj_get(json, "customerData");
+  if (customerData && yyjson_is_obj(customerData)) {
+    char* serialized = yyjson_val_write(customerData, 0, nullptr);
+    if (serialized) {
+      metadata_.customer_data_json = serialized;
+      free(serialized);
+    }
+  }
+
   setContext(account_sid_, call_sid_);
 }
 
@@ -563,8 +589,8 @@ std::unique_ptr<StorageUploader> Session::createStorageUploader(RecordFileType f
           connection_string_,
           container_name_
         );
-      case StorageService::GOOGLE_CLOUD_STORAGE:
-        return std::make_unique<GoogleUploader>(
+      case StorageService::GOOGLE_CLOUD_STORAGE: {
+        auto uploader = std::make_unique<GoogleUploader>(
           shared_from_this(),
           log_,
           uploadFolder_,
@@ -574,6 +600,11 @@ std::unique_ptr<StorageUploader> Session::createStorageUploader(RecordFileType f
           private_key_,
           token_uri_
         );
+        // The eval-notify hook builds a V4 signed URL from the same service-account key
+        // the uploader itself uses (see gcs-presigner.h).
+        uploader->setGcsPresignInfo(bucket_name_, client_email_, private_key_);
+        return uploader;
+      }
       default:
         std::cerr << "Unknown storage service.\n";
         return nullptr;
