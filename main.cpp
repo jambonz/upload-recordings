@@ -8,6 +8,8 @@
 
 #include <ev.h>
 
+#include <curl/curl.h>
+
 #include <aws/core/Aws.h>
 
 #include <spdlog/spdlog.h>
@@ -186,6 +188,12 @@ int main(int argc, const char **argv) {
     spdlog::info("  Max buffer size: {} MB", max_buffer_size / (1024 * 1024));
     spdlog::info("  Server port: {}", port);
     
+    // libcurl is not thread-safe to initialize implicitly: without this, the first
+    // curl_easy_init() call (from a worker thread, e.g. the eval-notify POST or a Google/
+    // Azure upload) would trigger it lazily off the main thread. Must happen before the
+    // thread pool starts.
+    curl_global_init(CURL_GLOBAL_ALL);
+
     Aws::SDKOptions options;
     try {
         // Disable AWS SDK file logging to prevent log files in working directory
@@ -302,6 +310,8 @@ int main(int argc, const char **argv) {
     spdlog::info("Shutting down AWS SDK");
     Aws::ShutdownAPI(options);
     spdlog::info("AWS SDK shutdown complete");
+
+    curl_global_cleanup();
 
     return 0;
 }

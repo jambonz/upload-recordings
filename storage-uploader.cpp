@@ -1,5 +1,6 @@
 #include "storage-uploader.h"
 #include "connection-manager.h"
+#include "eval-notifier.h"
 #include <aws/core/utils/json/JsonSerializer.h>
 #include <iostream>
 #include <stdexcept>
@@ -127,7 +128,48 @@ std::string StorageUploader::stampAndSerializeSessionSummary(const std::string& 
         }
     }
 
-    return json.View().WriteCompact();
+    stampedSessionSummaryJson_ = json.View().WriteCompact();
+    return stampedSessionSummaryJson_;
+}
+
+void StorageUploader::postUploadHook(const std::string& recordingKey) {
+    if (evalVendor_.empty() || evalApiKey_.empty()) {
+        return; // call-eval integration off for this account -- nothing to do
+    }
+
+    if (!shouldSampleCall(metadata_.call_sid, evalSamplingPercent_)) {
+        log_->debug("postUploadHook: call {} not selected by the {}% sample -- skipping",
+                    metadata_.call_sid, evalSamplingPercent_);
+        return;
+    }
+
+    try {
+        auto notifier = EvalNotifier::create(evalVendor_);
+        if (!notifier) {
+            log_->warn("postUploadHook: unsupported eval vendor '{}' -- skipping", evalVendor_);
+            return;
+        }
+
+        EvalNotifyContext ctx;
+        ctx.credential.vendor = evalVendor_;
+        ctx.credential.apiKey = evalApiKey_;
+        ctx.presign.presignable = presignInfoSet_;
+        ctx.presign.credentials = presignCredentials_;
+        ctx.presign.region = presignRegion_;
+        ctx.presign.bucket = presignBucket_;
+        ctx.presign.customEndpoint = presignEndpoint_;
+        ctx.recordingKey = recordingKey;
+        ctx.metadata = metadata_;
+        ctx.audioStartTime = audioStartTime_;
+        ctx.audioStartTimeSet = audioStartTimeSet_;
+        // Only attach a transcript when session.json actually landed -- audio-only is a
+        // valid send otherwise.
+        ctx.stampedSessionSummaryJson = sessionSummaryUploaded_ ? stampedSessionSummaryJson_ : std::string();
+
+        notifier->notify(log_, ctx);
+    } catch (const std::exception& e) {
+        log_->error("postUploadHook: exception notifying eval vendor '{}': {}", evalVendor_, e.what());
+    }
 }
 
 int StorageUploader::createMkstempFile(const std::string& prefix, std::string& outPath) {

@@ -296,7 +296,14 @@ void S3CompatibleUploader::finalizeUpload() {
 
         // Upload session summary after audio upload completes (not inside callback — avoids deadlock)
         if (!upload_failed_ && hasSessionSummary()) {
-            uploadSessionSummary(objectKey_);
+            sessionSummaryUploaded_ = uploadSessionSummary(objectKey_);
+        }
+
+        // Notify a call-evaluation vendor (Roark, ...), if configured, now that the
+        // recording (and session.json, if any) have landed. Must run before
+        // cleanupTempFile(), which destroys the session and this uploader.
+        if (!upload_failed_) {
+            postUploadHook(objectKey_);
         }
 
         // Now safe to destroy session
@@ -308,10 +315,10 @@ void S3CompatibleUploader::finalizeUpload() {
     }
 }
 
-void S3CompatibleUploader::uploadSessionSummary(const std::string& recordingKey) {
+bool S3CompatibleUploader::uploadSessionSummary(const std::string& recordingKey) {
     try {
         std::string body = stampAndSerializeSessionSummary(recordingKey);
-        if (body.empty()) return;
+        if (body.empty()) return false;
 
         std::string sessionKey = createSessionJsonPath(metadata_.call_sid);
         log_->info("Uploading session.json to {}", sessionKey);
@@ -327,9 +334,10 @@ void S3CompatibleUploader::uploadSessionSummary(const std::string& recordingKey)
 
         auto promise = std::make_shared<std::promise<void>>();
         auto future = promise->get_future();
+        auto succeeded = std::make_shared<std::atomic<bool>>(false);
 
         s3CrtClient_->PutObjectAsync(req,
-            [this, sessionKey, promise](const Aws::S3Crt::S3CrtClient*,
+            [this, sessionKey, promise, succeeded](const Aws::S3Crt::S3CrtClient*,
                 const Aws::S3Crt::Model::PutObjectRequest&,
                 const Aws::S3Crt::Model::PutObjectOutcome& outcome,
                 const std::shared_ptr<const Aws::Client::AsyncCallerContext>&) {
@@ -338,12 +346,19 @@ void S3CompatibleUploader::uploadSessionSummary(const std::string& recordingKey)
                         sessionKey, outcome.GetError().GetMessage());
                 } else {
                     log_->info("session.json uploaded successfully to {}", sessionKey);
+                    succeeded->store(true);
                 }
                 promise->set_value();
             });
 
-        future.wait_for(std::chrono::seconds(30));
+        auto status = future.wait_for(std::chrono::seconds(30));
+        if (status == std::future_status::timeout) {
+            log_->error("Timed out waiting for session.json upload to {}", sessionKey);
+            return false;
+        }
+        return succeeded->load();
     } catch (const std::exception& e) {
         log_->error("Exception uploading session.json: {}", e.what());
+        return false;
     }
 }

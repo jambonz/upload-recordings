@@ -15,6 +15,8 @@
 #include <spdlog/sinks/stdout_sinks.h>
 #include <memory>
 
+#include <aws/core/auth/AWSCredentials.h>
+
 // Forward declaration of Session
 class Session;
 
@@ -71,6 +73,29 @@ public:
         log_ = log;
     }
 
+    // Call-evaluation (Roark, ...) credential, decrypted and parsed by Session. Empty
+    // vendor/apiKey means the integration is off for this account -- the overwhelmingly
+    // common case, so postUploadHook() must early-return on it with no further work.
+    void setEvalCredential(const std::string& vendor, const std::string& apiKey,
+                           int samplingPercent) {
+        evalVendor_ = vendor;
+        evalApiKey_ = apiKey;
+        evalSamplingPercent_ = samplingPercent;
+    }
+
+    // Bucket info needed to presign a GET url for the recording. Only called by
+    // Session::createStorageUploader() for aws_s3/s3_compatible backends; left unset
+    // (presignInfoSet_ stays false) for google/azure, which postUploadHook() treats as
+    // "log and skip" per the v1 design.
+    void setPresignInfo(const Aws::Auth::AWSCredentials& credentials, const std::string& region,
+                         const std::string& bucket, const std::string& customEndpoint) {
+        presignCredentials_ = credentials;
+        presignRegion_ = region;
+        presignBucket_ = bucket;
+        presignEndpoint_ = customEndpoint;
+        presignInfoSet_ = true;
+    }
+
 protected:
     // Create a unique temporary file
     void createTempFile(const std::string& uploadFolder);
@@ -84,26 +109,54 @@ protected:
     // Create session.json object path: YYYY/MM/DD/{callSid}/session.json
     std::string createSessionJsonPath(const std::string& callSid);
 
-    // Stamp recording_key into sessionSummaryJson_ and return the final JSON body.
+    // Stamp recording_key into sessionSummaryJson_ and return the final JSON body. Also
+    // caches the stamped body in stampedSessionSummaryJson_ -- the stamped
+    // recording_started_at_ms is required for eval-notify transcript offsets, so the
+    // hook re-reads it from there rather than re-deriving it.
     // Returns empty string on failure.
     std::string stampAndSerializeSessionSummary(const std::string& recordingKey);
 
     // Get current date prefix as "YYYY/MM/DD/"
     static std::string currentDatePrefix();
 
-    // Upload session.json to storage — called from finalizeUpload after audio upload
-    virtual void uploadSessionSummary(const std::string& objectKey) = 0;
+    // Upload session.json to storage — called from finalizeUpload after audio upload.
+    // Returns whether session.json actually landed; the eval-notify hook only attaches a
+    // transcript when this returned true (audio-only is a valid send otherwise).
+    virtual bool uploadSessionSummary(const std::string& objectKey) = 0;
+
+    // Notify a call-evaluation vendor (Roark, ...) after the recording (and, if present,
+    // session.json) have landed. Must be called after uploadSessionSummary() and before
+    // cleanupTempFile() -- cleanupTempFile() destroys the session and this uploader with
+    // it. Never throws: any vendor/network failure is logged and swallowed here so it can
+    // never affect the recording upload or call processing. Early-returns with no work at
+    // all when no eval credential was set (the overwhelmingly common case).
+    void postUploadHook(const std::string& recordingKey);
 
     std::shared_ptr<spdlog::logger> log_;
 
     struct Metadata_t metadata_;
     std::string sessionSummaryJson_;
+    std::string stampedSessionSummaryJson_; // set by stampAndSerializeSessionSummary()
+    bool sessionSummaryUploaded_ = false;   // set by the caller once uploadSessionSummary() returns
     bool upload_in_progress_ = false;
     bool upload_failed_ = false;
 
     // Audio start timestamp for recording offset calculation
     std::chrono::system_clock::time_point audioStartTime_;
     bool audioStartTimeSet_ = false;
+
+    // Call-evaluation credential (empty = integration off) and, for aws_s3/s3_compatible
+    // backends only, the bucket info needed to presign a GET url for the recording.
+    std::string evalVendor_;
+    std::string evalApiKey_;
+    // Percentage of calls forwarded to the vendor. Defaults to "everything" so a
+    // credential stored before this field existed keeps its original behaviour.
+    int evalSamplingPercent_ = 100;
+    bool presignInfoSet_ = false;
+    Aws::Auth::AWSCredentials presignCredentials_;
+    std::string presignRegion_;
+    std::string presignBucket_;
+    std::string presignEndpoint_;
 
     std::string uploadFolder_;
     std::string tempFilePath_;

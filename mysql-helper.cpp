@@ -91,7 +91,8 @@ RecordCredentials MySQLHelper::fetchRecordCredentials(std::string& accountSid) {
 
     try {
         auto stmt = std::unique_ptr<sql::PreparedStatement>(
-          connection->prepareStatement("SELECT record_format, bucket_credential FROM accounts WHERE account_sid = ?")
+          connection->prepareStatement(
+            "SELECT record_format, bucket_credential, eval_credential FROM accounts WHERE account_sid = ?")
         );
         stmt->setString(1, accountSid);
 
@@ -99,6 +100,7 @@ RecordCredentials MySQLHelper::fetchRecordCredentials(std::string& accountSid) {
         if (res->next()) {
             credentials.recordFormat = res->getString("record_format");
             credentials.bucketCredential = res->getString("bucket_credential");
+            credentials.evalCredential = res->getString("eval_credential");
         } else {
             releaseConnection(connection);
             throw std::runtime_error("Account not found for SID: " + accountSid);

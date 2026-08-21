@@ -13,7 +13,8 @@ upload_recordings_SOURCES = main.cpp \
   google-uploader.cpp \
   upload-utils.cpp \
   mysql-helper.cpp \
-  s3-client-manager.cpp
+  s3-client-manager.cpp \
+  eval-notifier.cpp
 
 # Note: No need for thread-pool.cpp and connection-manager.cpp which are header-only
 

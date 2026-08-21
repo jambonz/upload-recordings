@@ -37,6 +37,10 @@ public:
     // Initialize path-style services from environment variable
     static void initPathStyleServices();
 
+    // Exposes the S3_PATH_STYLE_SERVICES list so other config builders (e.g. the eval
+    // notifier's presign client) can match this manager's addressing-style decisions.
+    static const std::vector<std::string>& getPathStyleServices() { return pathStyleServices_; }
+
 private:
     S3ClientManager() { initPathStyleServices(); }
     ~S3ClientManager() { shutdown(); }
