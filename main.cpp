@@ -21,6 +21,7 @@
 #include "string-utils.h"
 #include "s3-client-manager.h"
 #include "cloudwatch-client.h"
+#include "mysql-helper.h"
 
 extern const struct lws_protocols protocols[];
 static const lws_retry_bo_t retry = {
@@ -187,6 +188,21 @@ int main(int argc, const char **argv) {
     spdlog::info("  Buffer process size: {} KB", buffer_process_size / 1024);
     spdlog::info("  Max buffer size: {} MB", max_buffer_size / (1024 * 1024));
     spdlog::info("  Server port: {}", port);
+
+    // Probe the database before we start serving. The connection pool is built
+    // lazily on first use by the recording session handler, so without this a
+    // wrong password or unreachable host only shows up when someone places a
+    // call - which is a slow and confusing way to find a configuration error.
+    if (MySQLHelper::verifyConnectivity()) {
+        spdlog::info("  MySQL: connected to {}@{}/{}",
+                     std::getenv("MYSQL_USER") ? std::getenv("MYSQL_USER") : "?",
+                     std::getenv("MYSQL_HOST") ? std::getenv("MYSQL_HOST") : "?",
+                     std::getenv("MYSQL_DATABASE") ? std::getenv("MYSQL_DATABASE") : "?");
+    }
+    else {
+        spdlog::error("  MySQL: NOT reachable - recordings will fail until this is fixed");
+    }
+
     
     // libcurl is not thread-safe to initialize implicitly: without this, the first
     // curl_easy_init() call (from a worker thread, e.g. the eval-notify POST or a Google/
