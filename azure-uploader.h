@@ -3,6 +3,7 @@
 
 #include "storage-uploader.h"
 #include <string>
+#include <map>
 #include <vector>
 #include <curl/curl.h>
 
@@ -16,7 +17,8 @@ public:
     bool uploadSessionSummary(const std::string& recordingKey) override;
 
 private:
-  std::string generateAuthorizationHeader(const std::string& httpMethod, const std::string& url, const std::string& contentLength);
+  std::string generateAuthorizationHeader(const std::string& httpMethod, const std::string& url, const std::string& contentLength,
+                                          const std::map<std::string, std::string>& extraCanonicalHeaders = {});
 
     std::string accountName_;
     std::string accountKey_;

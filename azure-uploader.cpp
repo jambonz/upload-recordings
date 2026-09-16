@@ -399,22 +399,26 @@ std::string AzureUploader::generateBlockId(int blockNumber) {
     return encodeBase64(oss.str());
 }
 
-std::string AzureUploader::generateAuthorizationHeader(const std::string& httpMethod, const std::string& url, const std::string& contentLength) {
+std::string AzureUploader::generateAuthorizationHeader(const std::string& httpMethod, const std::string& url, const std::string& contentLength,
+                                                       const std::map<std::string, std::string>& extraCanonicalHeaders) {
 
     // Extract resource path (e.g., /container/blob)
+    size_t queryPos = url.find("?");
     std::string resourcePath = url.substr(url.find(".net") + 4); // Get everything after ".net"
     resourcePath = resourcePath.substr(0, resourcePath.find("?")); // Remove query parameters
 
     // Extract and sort query parameters (e.g., blockid, comp)
     std::map<std::string, std::string> queryParams;
-    std::string queryString = url.substr(url.find("?") + 1);
-    std::istringstream queryStream(queryString);
-    std::string pair;
-    while (std::getline(queryStream, pair, '&')) {
-        size_t pos = pair.find('=');
-        std::string key = pair.substr(0, pos);
-        std::string value = pair.substr(pos + 1);
-        queryParams[key] = value;
+    if (queryPos != std::string::npos) {
+        std::string queryString = url.substr(queryPos + 1);
+        std::istringstream queryStream(queryString);
+        std::string pair;
+        while (std::getline(queryStream, pair, '&')) {
+            size_t pos = pair.find('=');
+            std::string key = pair.substr(0, pos);
+            std::string value = pos == std::string::npos ? "" : pair.substr(pos + 1);
+            queryParams[key] = value;
+        }
     }
 
     // Build the canonicalized resource
@@ -422,6 +426,15 @@ std::string AzureUploader::generateAuthorizationHeader(const std::string& httpMe
     canonicalizedResource << "/" << accountName_ << resourcePath;
     for (const auto& param : queryParams) {
         canonicalizedResource << "\n" << param.first << ":" << param.second;
+    }
+
+    // Canonicalized headers: every x-ms-* header actually sent, sorted by name
+    std::map<std::string, std::string> canonicalHeaders = extraCanonicalHeaders;
+    canonicalHeaders["x-ms-date"] = xMsDate_;
+    canonicalHeaders["x-ms-version"] = "2020-02-10";
+    std::ostringstream canonicalizedHeaders;
+    for (const auto& h : canonicalHeaders) {
+        canonicalizedHeaders << h.first << ":" << h.second << "\n";
     }
 
     // Build the string-to-sign
@@ -438,8 +451,7 @@ std::string AzureUploader::generateAuthorizationHeader(const std::string& httpMe
                  << "\n"                             // If-None-Match (empty)
                  << "\n"                             // If-Unmodified-Since (empty)
                  << "\n"                             // Range (empty)
-                 << "x-ms-date:" << xMsDate_ << "\n" // x-ms-date header
-                 << "x-ms-version:2020-02-10\n"      // x-ms-version header
+                 << canonicalizedHeaders.str()       // Canonicalized x-ms-* headers
                  << canonicalizedResource.str();     // Canonicalized resource
 
     // Decode the account key (base64)
@@ -495,7 +507,9 @@ bool AzureUploader::uploadSessionSummary(const std::string& recordingKey) {
         std::string sessionUrl = uploadUrlBase_ + sessionKey;
         std::string contentLength = std::to_string(body.size());
         xMsDate_ = getCurrentDateTimeRFC1123();
-        std::string authorizationHeader = generateAuthorizationHeader("PUT", sessionUrl, contentLength);
+        // x-ms-blob-type is sent on this request, so it must be signed too
+        std::string authorizationHeader = generateAuthorizationHeader("PUT", sessionUrl, contentLength,
+                                                                      {{"x-ms-blob-type", "BlockBlob"}});
 
         MemoryBuffer buffer = { body.c_str(), body.size() };
 
