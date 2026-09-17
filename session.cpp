@@ -112,7 +112,16 @@ void Session::addData(int isBinary, const char *data, size_t len) {
                         }
                     }
                 } else {
-                    log_->info("Unexpected text frame after metadata: {}", sessionSummaryBuffer_);
+                    yyjson_val *eventField = yyjson_obj_get(root, "event");
+                    if (eventField && yyjson_is_str(eventField) &&
+                        std::string(yyjson_get_str(eventField)) == "dtmf") {
+                        // Don't log the digit value (privacy)
+                        yyjson_val *durationField = yyjson_obj_get(root, "duration");
+                        log_->info("Unexpected text frame after metadata: dtmf event (duration {})",
+                            durationField && yyjson_is_num(durationField) ? yyjson_get_num(durationField) : 0.0);
+                    } else {
+                        log_->info("Unexpected text frame after metadata: {}", sessionSummaryBuffer_);
+                    }
                 }
                 yyjson_doc_free(doc);
                 sessionSummaryBuffer_.clear();
