@@ -30,6 +30,9 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
+    permissions:
+      id-token: write   # mint the OIDC token for AWS role assumption
+      contents: read
     # Build inside a Debian bookworm container so the produced .deb links
     # against the libs customers run on bookworm (libssl3, libstdc++6,
     # libev, etc.) — not noble's newer libs. debian:bookworm is multi-arch,
@@ -124,11 +127,18 @@ jobs:
           done
           ls -lh
 
+      - name: Configure AWS credentials
+        # No static credential: the job presents a short-lived GitHub OIDC
+        # token and assumes a role whose trust policy admits only this
+        # repository and whose permissions are scoped to this package's
+        # prefix in the bucket. Requires `id-token: write` on the job.
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::376029039784:role/jambonz-ci-upload-recordings
+          aws-region: ${{ secrets.AWS_S3_REGION }}
+
       - name: Upload to S3
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_S3_REGION }}
           AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
         run: |
           # Trim any trailing whitespace/newline from the bucket value
