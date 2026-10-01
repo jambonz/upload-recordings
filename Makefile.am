@@ -54,7 +54,7 @@ endif
 
 # Standalone unit tests for the pure eval-notify helpers (no MySQL, no network, no live
 # cloud calls). Run with `make check`.
-check_PROGRAMS = eval_test
+check_PROGRAMS = eval_test azure_test
 eval_test_SOURCES = eval-test.cpp \
   eval-notifier.cpp \
   gcs-presigner.cpp \
@@ -64,7 +64,27 @@ eval_test_SOURCES = eval-test.cpp \
   yyjson.c
 eval_test_CPPFLAGS = $(upload_recordings_CPPFLAGS)
 eval_test_LDADD = $(upload_recordings_LDADD)
-TESTS = eval_test
+
+# AzureUploader request signing against a local capture proxy (no Azure, no MySQL)
+azure_test_SOURCES = azure-test.cpp \
+  azure-uploader.cpp \
+  storage-uploader.cpp \
+  upload-utils.cpp \
+  session.cpp \
+  session-wrapper.cpp \
+  protocol-lws.c \
+  s3-compatible-uploader.cpp \
+  google-uploader.cpp \
+  mysql-helper.cpp \
+  s3-client-manager.cpp \
+  eval-notifier.cpp \
+  gcs-presigner.cpp \
+  coval-mapper.cpp \
+  influx-alert.cpp \
+  yyjson.c
+azure_test_CPPFLAGS = $(upload_recordings_CPPFLAGS)
+azure_test_LDADD = $(upload_recordings_LDADD)
+TESTS = eval_test azure_test
 
 AM_CXXFLAGS = -std=c++17
 AM_LDFLAGS = -L/usr/lib -L/usr/local/lib
