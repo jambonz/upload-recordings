@@ -78,9 +78,6 @@ AzureUploader::AzureUploader(const std::shared_ptr<Session>& session, std::share
   // Add standard headers
   headers_ = curl_slist_append(headers_, "Content-Type: application/octet-stream");
 
-  // Set the x-ms-date
-  xMsDate_ = getCurrentDateTimeRFC1123();
-
   createTempFile(uploadFolder);
 }
 
@@ -428,6 +425,9 @@ std::string AzureUploader::generateAuthorizationHeader(const std::string& httpMe
         canonicalizedResource << "\n" << param.first << ":" << param.second;
     }
 
+    // Fresh per request: Azure rejects x-ms-date older than 15 min
+    xMsDate_ = getCurrentDateTimeRFC1123();
+
     // Canonicalized headers: every x-ms-* header actually sent, sorted by name
     std::map<std::string, std::string> canonicalHeaders = extraCanonicalHeaders;
     canonicalHeaders["x-ms-date"] = xMsDate_;
@@ -506,7 +506,6 @@ bool AzureUploader::uploadSessionSummary(const std::string& recordingKey) {
         // Azure PUT Blob (BlockBlob) — single request, no chunking needed for small JSON
         std::string sessionUrl = uploadUrlBase_ + sessionKey;
         std::string contentLength = std::to_string(body.size());
-        xMsDate_ = getCurrentDateTimeRFC1123();
         // x-ms-blob-type is sent on this request, so it must be signed too
         std::string authorizationHeader = generateAuthorizationHeader("PUT", sessionUrl, contentLength,
                                                                       {{"x-ms-blob-type", "BlockBlob"}});
