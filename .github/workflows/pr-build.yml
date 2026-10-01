@@ -1,0 +1,81 @@
+name: PR build check
+
+# Compiles and links on every pull request, then stops. Nothing is uploaded,
+# published, tagged or released - this workflow deliberately has no S3, GitHub
+# Release or apt-repo steps, and no AWS credentials.
+#
+# Why it exists: build-deb.yml only runs on `v*` tags and workflow_dispatch, so
+# until now nothing compiled main before a release was cut. A change that does
+# not build could reach a tagged build unnoticed.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same PR supersedes the previous run - these builds are long
+# and there is no value in finishing a stale one.
+concurrency:
+  group: pr-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    # One architecture only. build-deb.yml builds amd64 and arm64 because the
+    # released packages must link against each; for "does it compile", one is
+    # enough and halves the cost.
+    runs-on: ubuntu-24.04
+    # Same container as the release build, so the compiler, libstdc++ and
+    # library versions match what customers actually run on bookworm.
+    container:
+      image: debian:bookworm
+    # debian/rules builds libwebsockets v4.3.3 and aws-sdk-cpp v1.11.500 from
+    # source on every invocation, which dominates the runtime.
+    timeout-minutes: 90
+
+    steps:
+      - name: Bootstrap container
+        # debian:bookworm is minimal. sudo must be on PATH because debian/rules
+        # invokes `sudo make install` for the from-source dependencies.
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              git curl ca-certificates sudo xz-utils
+
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install build dependencies
+        # Kept in step with build-deb.yml. If that list changes, change it here.
+        run: |
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential \
+            devscripts \
+            debhelper \
+            autoconf \
+            automake \
+            cmake \
+            git \
+            pkg-config \
+            libcjson-dev \
+            libmp3lame-dev \
+            libmysqlcppconn-dev \
+            libspdlog-dev \
+            libfmt-dev \
+            libssl-dev \
+            libcurl4-openssl-dev \
+            libgoogle-perftools-dev \
+            libboost-all-dev \
+            libev-dev
+
+      - name: Compile and link
+        # Produces a .deb as a side effect of building. It is intentionally left
+        # on the runner and discarded - this job publishes nothing.
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          dpkg-buildpackage -us -uc -b
+
+      - name: Confirm the binary linked
+        run: |
+          test -f ../upload-recordings_*.deb || { echo "no package produced"; exit 1; }
+          echo "build succeeded:"
+          ls -lh ../upload-recordings_*.deb

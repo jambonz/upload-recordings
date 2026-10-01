@@ -24,6 +24,12 @@ public:
     // Singleton accessor
     static MySQLHelper& getInstance(size_t poolSize = 10);
 
+    // Force construction of the singleton at startup so a bad credential or an
+    // unreachable database is reported immediately, rather than on the first
+    // recording. Returns true on success; on failure it logs the reason and
+    // returns false without throwing. Safe to call more than once.
+    static bool verifyConnectivity(size_t poolSize = 10);
+
     // Destructor
     ~MySQLHelper();
 
