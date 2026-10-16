@@ -255,8 +255,9 @@ void S3CompatibleUploader::finalizeUpload() {
                 try {
                     if (!outcome.IsSuccess()) {
                         const auto& error = outcome.GetError();
-                        log_->error("Failed to upload file: {}: Error Type: {}, Error Message: {}, Request ID: {}",
+                        log_->error("Failed to upload file: {}: HTTP Status: {}, Error Type: {}, Error Message: {}, Request ID: {}",
                             tempFilePath_,
+                            static_cast<int>(error.GetResponseCode()),
                             static_cast<int>(error.GetErrorType()),
                             error.GetMessage(),
                             error.GetRequestId());
@@ -342,8 +343,10 @@ bool S3CompatibleUploader::uploadSessionSummary(const std::string& recordingKey)
                 const Aws::S3Crt::Model::PutObjectOutcome& outcome,
                 const std::shared_ptr<const Aws::Client::AsyncCallerContext>&) {
                 if (!outcome.IsSuccess()) {
-                    log_->error("Failed to upload session.json to {}: {}",
-                        sessionKey, outcome.GetError().GetMessage());
+                    log_->error("Failed to upload session.json to {}: HTTP Status: {}, {}",
+                        sessionKey,
+                        static_cast<int>(outcome.GetError().GetResponseCode()),
+                        outcome.GetError().GetMessage());
                 } else {
                     log_->info("session.json uploaded successfully to {}", sessionKey);
                     succeeded->store(true);
