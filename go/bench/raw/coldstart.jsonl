@@ -1,0 +1,10 @@
+{"suite":"coldstart","impl":"cpp","ms":5092}
+{"suite":"coldstart","impl":"cpp","ms":61}
+{"suite":"coldstart","impl":"cpp","ms":67}
+{"suite":"coldstart","impl":"cpp","ms":58}
+{"suite":"coldstart","impl":"cpp","ms":56}
+{"suite":"coldstart","impl":"go","ms":13}
+{"suite":"coldstart","impl":"go","ms":12}
+{"suite":"coldstart","impl":"go","ms":13}
+{"suite":"coldstart","impl":"go","ms":11}
+{"suite":"coldstart","impl":"go","ms":11}
