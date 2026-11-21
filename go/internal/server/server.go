@@ -124,8 +124,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	s.httpSrv.Close()
 	s.mu.Lock()
 	s.closing = true
+	// Let each session read what its peer has already sent, then stop: the
+	// deadline ends the read loop and the session finalizes as on a hang-up.
 	for c := range s.conns {
-		c.Close()
+		c.SetReadDeadline(time.Now().Add(2 * readInterval))
 	}
 	s.mu.Unlock()
 

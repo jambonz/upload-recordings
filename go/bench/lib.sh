@@ -60,3 +60,47 @@ loadgen() {
     -e SSL_CERT_FILE=/certs/ca.crt -v "$CERTS:/certs:ro" -v "$RESULTS:/results" \
     "$TOOLS_IMAGE" loadgen -url ws://ur-sut:3017 "$@"
 }
+
+ncpus() { # "0-3" -> 4, "0" -> 1
+  local a=${1%-*} b=${1#*-}; echo $((b - a + 1))
+}
+
+# run_one <suite> <impl> <cpuset> <format> <sessions> <call_secs> <ramp_secs> <rep> [loadgen args...]
+# Starts a fresh server, drives one load, and appends one merged JSON line
+# (loadgen result + server resource usage) to $RESULTS/<suite>.jsonl.
+run_one() {
+  local suite=$1 impl=$2 cpus=$3 format=$4 sessions=$5 call=$6 ramp=$7 rep=$8; shift 8
+  local n; n=$(ncpus "$cpus")
+  local label="$suite/$impl/c$n/$format/s$sessions/r$rep"
+  local run="${suite}${impl}c${n}${format}s${sessions}r${rep}x$$"
+  echo "=== $label"
+  # Same explicit settings for both: N worker threads / GOMAXPROCS for an
+  # N-core limit (the C++ binary would otherwise size its pool from the
+  # host's 12 CPUs), and the same upload connection cap.
+  start_sut "$impl" "$cpus" --threads "${THREADS:-$n}" --aws-max-connections "${MAXCONNS:-64}"
+  start_monitor "$label" "mon-$run.json"
+  sleep 3
+  loadgen -account "acct-$format${ACCOUNT_SUFFIX:-}" -format "$format" -sessions "$sessions" -call "$call" -ramp "$ramp" \
+    -run "$run" -label "$label" -out "/results/lg-$run.json" "$@" >/dev/null
+  sleep 2
+  stop_monitor
+  local t0 t1; t0=$(date +%s)
+  docker stop -t 120 ur-sut >/dev/null; t1=$(date +%s)
+  docker logs ur-sut > "$RESULTS/last-server.txt" 2>&1 || true
+  python3 - "$RESULTS/lg-$run.json" "$RESULTS/mon-$run.json" "$suite" "$impl" "$n" "$format" "$rep" "$((t1 - t0))" \
+    "$(grep -c -i 'dropping' "$RESULTS/last-server.txt" || true)" >> "$RESULTS/$suite.jsonl" <<'PY'
+import json, sys
+lg = json.load(open(sys.argv[1])); mon = json.load(open(sys.argv[2]))
+out = dict(suite=sys.argv[3], impl=sys.argv[4], cores=int(sys.argv[5]), format=sys.argv[6], rep=int(sys.argv[7]),
+           stop_secs=int(sys.argv[8]), drop_log_lines=int(sys.argv[9]), load=lg, server=mon)
+print(json.dumps(out))
+PY
+  rm -f "$RESULTS/lg-$run.json" "$RESULTS/mon-$run.json"
+  tail -1 "$RESULTS/$suite.jsonl" | python3 -c '
+import json,sys
+r=json.loads(sys.stdin.read()); l=r["load"]; s=r["server"]
+print("    cpu %.1fs avg %.0f%% peak %.0f%% | rss idle %.0f median %.0f peak %.0f MB | found %d missing %d short %d | latency p50 %.0f p99 %.0f max %.0f ms | late %d (max %d ms) | busiest thread %.0f%%" % (
+  s["cpu_secs"], s["avg_cpu_pct"], s["peak_cpu_pct"], s["start_rss_mb"], s["median_rss_mb"], s["peak_rss_mb"],
+  l["objects_found"], l["objects_missing"], l["objects_short"], l["latency_ms"]["P50"], l["latency_ms"]["P99"], l["latency_ms"]["Max"],
+  l["late_frames"], l["max_late_ms"], s["busiest_thread_share_pct"]))'
+}

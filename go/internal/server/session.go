@@ -28,6 +28,11 @@ const (
 	// maxTextMessage bounds a metadata or session:summary message.
 	maxTextMessage = 16 * 1024 * 1024
 
+	// readInterval and readBuffer set how the socket is read; see
+	// coalescingReader.
+	readInterval = 200 * time.Millisecond
+	readBuffer   = 16 * 1024
+
 	lookupTimeout      = 15 * time.Second
 	uploadTimeout      = 10 * time.Minute
 	sessionJSONTimeout = 30 * time.Second
@@ -65,7 +70,36 @@ type session struct {
 	spoolErr error
 }
 
-func newSession(srv *Server, conn net.Conn, br *bufio.Reader) *session {
+// coalescingReader reads the socket at most once per readInterval.
+//
+// A call delivers a 640-byte frame every 20 ms. Reading each one as it lands
+// costs a goroutine wake-up and two read syscalls per frame, which measured
+// about 75% more CPU than the C++ event loop. Nothing here needs a frame the
+// instant it arrives, so the session lets the kernel's socket buffer collect
+// a few and takes them in one read: ten times fewer wake-ups for the same
+// bytes. The price is that a hang-up is noticed up to readInterval late.
+type coalescingReader struct {
+	conn   net.Conn
+	last   time.Time
+	behind bool // the last read filled the buffer: more is waiting
+}
+
+func (r *coalescingReader) Read(p []byte) (int, error) {
+	if wait := readInterval - time.Since(r.last); wait > 0 && !r.behind {
+		time.Sleep(wait)
+	}
+	n, err := r.conn.Read(p)
+	r.last = time.Now()
+	r.behind = n == len(p)
+	return n, err
+}
+
+func newSession(srv *Server, conn net.Conn, hijacked *bufio.Reader) *session {
+	// Anything the client sent right behind its handshake is already in the
+	// HTTP server's reader; carry it over.
+	early, _ := hijacked.Peek(hijacked.Buffered())
+	br := bufio.NewReaderSize(io.MultiReader(bytes.NewReader(append([]byte(nil), early...)),
+		&coalescingReader{conn: conn}), readBuffer)
 	return &session{
 		srv:        srv,
 		conn:       conn,
